@@ -1,11 +1,18 @@
 # dsh-large-proj-perf
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)]()
+[![Version](https://img.shields.io/badge/version-1.1.1-blue)]()
 [![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、投影分片预热、分片 materialize，
 一次装齐，消除 fork/历史加载对超大会话的事件循环阻塞。
+
+> ⚠️ **版本兼容性警告**：本插件通过 monkey-patch dsh 内部方法实现（`SessionStore.fork`、
+> `PersistenceCoordinator.initFor`、`JsonlSessionPersistence.encodeMaterialization`、
+> `SessionPreparations` 等），**与 dsh 版本高度耦合**，当前针对 `0.1.0-rc.6` 开发并验证。
+> dsh 升级后这些内部方法签名可能变化——所有补丁都带源码特征校验，不匹配时**自动跳过
+> 优化并回退官方行为**（不会导致崩溃），但优化会静默失效。升级 dsh 后请确认启动日志
+> 无 `signature mismatch` 告警，必要时重新适配本插件。
 
 ## 问题
 
@@ -94,6 +101,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-dsh.ps1
 重启 → 打开浏览器）。若不使用该脚本，插件启动时会打 `V8 heap limit ... < ...`
 告警提醒你加参数。
 
+### 避免超长对话（主动规避）
+
+本插件做的是「被动优化」——把 fork/历史加载/落盘的大会话阻塞降下来，但无法削减
+**正在使用的 live 会话事件树**（每个 ~700MB，dsh 架构决定全量驻留）。要从根上避免
+超长对话的内存/卡顿，推荐配套使用：
+
+- **[dsh-fresh-start](https://github.com/orangeofcarl0-sys/dsh-fresh-start)**：
+  输入 `/fresh` 一键「总结当前对话 → 开启新对话 → 归档老对话」。在一个会话工作
+  一段时间后用它归档，释放 live 事件树内存，而不是让会话无限增长到 70 万+ 事件。
+
+```sh
+dsh plugin --profile web add github:orangeofcarl0-sys/dsh-fresh-start
+```
+
+两者配合：`dsh-large-proj-perf` 兜底性能，`dsh-fresh-start` 主动控制会话规模。
+
 ## API
 
 `POST http://127.0.0.1:3080/dsh-large-proj-perf/api/<method>`：
@@ -121,12 +144,16 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
 
 ## 局限
 
+- **版本高度耦合（重要）**：补丁绑定 rc.6 内部结构（`_forkSeed`、
+  `initFor`/`encodeMaterialization` 源码特征、`SessionPreparations.capacity` 等）。
+  dsh 大版本升级后，特征校验会自动跳过优化并回退官方行为（不崩溃、不误补），
+  但**优化会静默失效**——升级后务必确认启动日志无 `signature mismatch`，并按需
+  重新适配。本插件不适合在 dsh 版本频繁变动时依赖其优化。
 - `enqueue` 的逐事件 `structuredClone`（fork 第三次拷贝）在插件层无法安全消除——
   它在 write-behind 闭包内部，且承担"persistence 独立于生产者"的所有权语义。根治需
   上游改为按需快照。
 - 冷会话 `coldSnapshot` 的全量 `readFrom(0)`（zstd 解码 + 逐事件
   `snapshotStoredEvents` 深拷贝）无法在插件层安全分片——`readRaw` 的同步解码是硬伤。
   根治需上游把 `readFromCore`/`loadStored` 改成分片让出事件循环。
-- 超大会话（70 万+ 事件）加载本身有内存 OOM 风险，与插件无关。
-- 补丁绑定 rc.6 内部结构（`_forkSeed`、`initFor`/`encodeMaterialization` 源码特征）；
-  大版本升级后特征校验会自动跳过优化并保持官方行为，重新适配即可。
+- 超大会话（70 万+ 事件）加载本身有内存 OOM 风险，与插件无关；建议配合
+  [dsh-fresh-start](https://github.com/orangeofcarl0-sys/dsh-fresh-start) 主动归档。
