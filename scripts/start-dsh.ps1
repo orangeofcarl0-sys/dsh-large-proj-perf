@@ -50,7 +50,7 @@ while ((Get-Date) -lt $deadline) {
 }
 if ($ready) {
   Write-Host "$log dsh is up at $Url"
-  Start-Process $Url
+  Write-Host "$log (please open manually in Chrome/Firefox — Edge has severe perf issues with large session history)"
   exit 0
 } else {
   Write-Host "$log WARNING: port 3080 not ready after 30s; open $Url manually."
