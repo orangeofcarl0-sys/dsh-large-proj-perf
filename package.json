@@ -1,0 +1,43 @@
+{
+  "name": "dsh-large-proj-perf",
+  "version": "1.0.0",
+  "description": "DSH 大会话性能插件：零拷贝 fork + fast initFor + 投影分片预热 + fork 缓存回填 + 分片 materialize（DeepSeek Harness / DSH）",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orangeofcarl0-sys/dsh-large-proj-perf.git"
+  },
+  "bugs": {
+    "url": "https://github.com/orangeofcarl0-sys/dsh-large-proj-perf/issues"
+  },
+  "homepage": "https://github.com/orangeofcarl0-sys/dsh-large-proj-perf#readme",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "fork",
+    "projection",
+    "performance",
+    "materialize"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

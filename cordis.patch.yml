@@ -1,0 +1,9 @@
+# dsh-large-proj-perf bundle patch
+#
+# 安装：
+#   dsh plugin --profile web add github:orangeofcarl0-sys/dsh-large-proj-perf
+#
+# 若 profile 的 cordis.patch.yml 已有本插件的手工挂载行，请删除以免双实例。
+- insert:
+    - id: large-proj-perf
+      name: 'dsh-large-proj-perf'
