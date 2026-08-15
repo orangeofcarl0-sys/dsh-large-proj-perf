@@ -45,6 +45,13 @@ dsh `0.1.0-rc.6` 在大会话（数十万事件）上存在三类同步阻塞，
 6. **冷会话补行**（`backfillOnBoot`，B 辅助，默认关）：磁盘缺缓存行的大会话流式
    补写。默认关的原因：`readRaw` 的 zstd 全量解码是同步的、插件层不可分片，
    大文件仍会冻结事件循环数秒~数十秒。
+7. **冷会话 LRU 裁剪**（`preparedCacheSize`，D）：persistence 的冷会话 LRU 默认
+   缓存 5 个完整事件树（每个大会话 ~700MB，5×700MB 叠加是 OOM 主因之一）。插件
+   运行时把容量降到 `preparedCacheSize`（默认 1）并淘汰最旧的 ready 条目，主动
+   释放冷会话事件树——省 ~2.8GB。无需手动改 `cordis.patch.yml`。
+8. **heap 上限检测**（`heapWarnBytes`，D）：`--max-old-space-size` 是 V8 启动期
+   参数、进程内改不了。插件检测 heap 上限低于阈值（默认 6GB）时告警，并引导用
+   `scripts/start-dsh.ps1`（内置 `--max-old-space-size=8192`）重启。
 
 ### 安全性
 
@@ -72,6 +79,20 @@ dsh plugin --profile web add file:<本仓库路径>
 > 不会自动跟随源文件更新），或重新执行 `dsh plugin add`。
 
 重启 `dsh web` 生效。日志出现 `[dsh-perf] installed (...)` 即成功。
+
+### 大会话内存（推荐启动方式）
+
+多个超大会话（数十万事件）的 live 事件树每个 ~700MB，默认 V8 heap 上限 ~4GB
+会让 dsh 在内存叠加时 OOM。插件已自动做冷会话 LRU 裁剪（省 ~2.8GB），但 heap
+上限是 V8 启动期参数、进程内改不了，推荐用仓库自带脚本启动：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-dsh.ps1
+```
+
+它等价于 `node --max-old-space-size=8192 .../dsh/lib/bin.js web`（停止旧进程 →
+重启 → 打开浏览器）。若不使用该脚本，插件启动时会打 `V8 heap limit ... < ...`
+告警提醒你加参数。
 
 ## API
 

@@ -1,7 +1,7 @@
 {
   "name": "dsh-large-proj-perf",
-  "version": "1.0.0",
-  "description": "DSH 大会话性能插件：零拷贝 fork + fast initFor + 投影分片预热 + fork 缓存回填 + 分片 materialize（DeepSeek Harness / DSH）",
+  "version": "1.1.0",
+  "description": "DSH 大会话性能插件：零拷贝 fork + fast initFor + 投影分片预热 + fork 缓存回填 + 分片 materialize + 冷会话 LRU 裁剪 + heap 检测（DeepSeek Harness / DSH）",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -12,6 +12,7 @@
   },
   "files": [
     "lib",
+    "scripts",
     "cordis.patch.yml"
   ],
   "license": "MIT",
