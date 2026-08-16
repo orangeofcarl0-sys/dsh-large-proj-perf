@@ -83,7 +83,7 @@ const check = (label, cond, extra = '') => {
   const store = makeStore()
   const { ctx } = makeCtx(store)
   store.ctx = { ...store.ctx, effect: ctx.effect }
-  const src = store.create('session-src1', { seed: seedEvents, meta: { cwd: 'F:\\bench', delegationDepth: 0, agentPreset: 'code' } })
+  const src = store.create('session-src1', { seed: seedEvents, meta: { cwd: 'F:\\bench', delegationDepth: 0, agentPreset: 'code', origin: 'subagent' } })
   const t0 = performance.now()
   const child = store.fork('session-src1')
   const nativeMs = performance.now() - t0
@@ -91,6 +91,8 @@ const check = (label, cond, extra = '') => {
   // 但 _forkSeed 截到 lastEvent，构造器再补一个新 end-seed → 数量相同
   check('native fork works', child.events.length === src.events.length)
   check('native fork header', child.header.parentSession === 'session-src1' && child.header.seedLength === src.events.length)
+  // rc.6 原生 fork 的 meta 只带 cwd/parentSession/seedLength——不继承 origin
+  check('native fork does not inherit origin', !('origin' in child.header))
   console.log(`  native fork: ${nativeMs.toFixed(1)}ms, events=${child.events.length}`)
 }
 
@@ -99,7 +101,7 @@ const check = (label, cond, extra = '') => {
   const store = makeStore()
   const { ctx } = makeCtx(store)
   store.ctx = { ...store.ctx, effect: ctx.effect }
-  const src = store.create('session-src2', { seed: seedEvents, meta: { cwd: 'F:\\bench', delegationDepth: 0, agentPreset: 'code' } })
+  const src = store.create('session-src2', { seed: seedEvents, meta: { cwd: 'F:\\bench', delegationDepth: 0, agentPreset: 'code', origin: 'subagent' } })
 
   const plugin = await import('../lib/index.js')
   const dispose = plugin.apply({ ...ctx, sessions: store })
@@ -112,18 +114,21 @@ const check = (label, cond, extra = '') => {
   check('zero-copy fork header parent', child.header.parentSession === 'session-src2')
   check('zero-copy fork header seedLength', child.header.seedLength === src.events.length)
   check('zero-copy fork cwd inherited', child.header.cwd === 'F:\\bench')
-  // 官方 fork 本身不继承 agentPreset/delegationDepth（已验证 rc.6 行为），
+  // 官方 fork 本身不继承 agentPreset/delegationDepth/origin（已验证 rc.6 行为），
   // 插件行为与官方一致：
   check('header parity with native (no agentPreset)', !('agentPreset' in child.header) && !('delegationDepth' in child.header))
+  check('header parity with native (no origin)', !('origin' in child.header))
   check('child in store', store.get(child.id) === child)
   // 深冻结：共享引用不可变
   let frozen = true
   try { child.events[1].data.content[0].text = 'MUTATE' } catch { frozen = false }
   check('events deep-frozen (shared refs immutable)', !frozen)
-  // 与官方产物逐事件 JSON 等价
-  const nativeChildJson = JSON.stringify(makeStoreForkBaseline())
-  const patchedChildJson = JSON.stringify(child.events.map((e) => JSON.parse(JSON.stringify(e))))
-  check('event stream length matches native', child.events.length === makeStoreForkBaseline().length)
+  // 与官方产物逐事件 JSON 等价：seed 的最后一个事件是各源自带的 end-seed 标记
+  // （建源时间戳不同），比对排除它——其余前缀来自共享 seedEvents，确定性数据
+  const baselineEvents = makeStoreForkBaseline()
+  check('event stream length matches native', child.events.length === baselineEvents.length)
+  check('seed prefix byte-identical to native',
+    JSON.stringify(child.events.slice(0, child.header.seedLength - 1)) === JSON.stringify(baselineEvents.slice(0, child.header.seedLength - 1)))
   console.log(`  zero-copy fork: ${patchedMs.toFixed(1)}ms  (native baseline ~${'346ms @20k events / scaled'}`+`)`)
 
   // boundary fork（中途分叉）

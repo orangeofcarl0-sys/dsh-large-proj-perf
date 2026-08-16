@@ -4,6 +4,9 @@
   "description": "DSH 大会话性能插件：零拷贝 fork + fast initFor + 投影分片预热 + fork 缓存回填 + 分片 materialize + 冷会话 LRU 裁剪 + heap 检测（DeepSeek Harness / DSH）",
   "type": "module",
   "main": "lib/index.js",
+  "engines": {
+    "node": ">=22.15.0"
+  },
   "scripts": {
     "test": "node tests/smoke_fork.mjs && node tests/test_fast_initfor.mjs && node tests/test_cache_trim.mjs && node tests/smoke_warmup.mjs && node tests/test_chunked_materialize.mjs && node tests/test_backfill.mjs"
   },

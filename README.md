@@ -96,6 +96,9 @@ dsh plugin --profile web add file:<本仓库路径>
 
 重启 `dsh web` 生效。日志出现 `[dsh-perf] installed (...)` 即成功。
 
+> 环境要求：Node **≥ 22.15.0**（`node:zlib` 的 zstd 接口所需，低版本加载插件
+> 会直接失败）。`package.json` 已声明 `engines`。
+
 ### 大会话内存（推荐启动方式）
 
 多个超大会话（数十万事件）的 live 事件树每个 ~700MB，默认 V8 heap 上限 ~4GB
@@ -152,7 +155,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 npm test   # 或单独跑：node tests/smoke_fork.mjs
 ```
 
-- `tests/smoke_fork.mjs`（14 断言）：官方 fork 基线 / 零拷贝 fork 功能等价 /
+- `tests/smoke_fork.mjs`（17 断言）：官方 fork 基线 / 零拷贝 fork 功能等价 /
+  header 平价（含 origin 不继承）/ seed 前缀逐字节等价 /
   dispose 还原 / 版本漂移回退 —— ALL PASS
 - `tests/test_fast_initfor.mjs`（8 断言）：initFor 补丁安装 / 源码特征漂移跳过 /
   无 persistence 服务存活 —— ALL PASS

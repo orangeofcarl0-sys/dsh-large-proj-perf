@@ -33,8 +33,26 @@ if ($procs.Count -gt 0) {
 }
 
 Write-Host "$log starting dsh web (max-old-space-size=$MaxOldSpaceMb)..."
-$bin = Join-Path $env:APPDATA 'npm\node_modules\@deepseek-ai\dsh\lib\bin.js'
-$node = (Get-Command node.exe).Source
+# 定位 dsh 安装：优先 npm root -g（支持自定义 npm prefix），回退默认 APPDATA 路径
+$bin = $null
+$npmRoot = (npm root -g 2>$null | Out-String).Trim()
+foreach ($root in @($npmRoot, (Join-Path $env:APPDATA 'npm\node_modules'))) {
+  if ($root -and (Test-Path (Join-Path $root '@deepseek-ai\dsh\lib\bin.js'))) {
+    $bin = Join-Path $root '@deepseek-ai\dsh\lib\bin.js'
+    break
+  }
+}
+if (-not $bin) {
+  Write-Host "$log ERROR: dsh not found (looked in npm root -g and $env:APPDATA\npm\node_modules)"
+  Write-Host "$log        install first: npm install -g @deepseek-ai/dsh"
+  exit 1
+}
+$nodeCmd = Get-Command node.exe -ErrorAction SilentlyContinue
+if (-not $nodeCmd) {
+  Write-Host "$log ERROR: node.exe not found in PATH"
+  exit 1
+}
+$node = $nodeCmd.Source
 $cmd = "start `"`" /min `"$node`" --max-old-space-size=$MaxOldSpaceMb `"$bin`" web"
 Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" `
   -ArgumentList '/c', $cmd `
