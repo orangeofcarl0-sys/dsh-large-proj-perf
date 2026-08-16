@@ -1,4 +1,4 @@
-# dsh-large-proj-perf 推荐启动脚本
+﻿# dsh-large-proj-perf 推荐启动脚本
 # 停止旧 dsh web → 以 --max-old-space-size=8192 重启 → 自动打开浏览器
 #
 # 为什么需要这个脚本：

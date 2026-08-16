@@ -79,5 +79,95 @@ function makeCtx(coordinator) {
   dispose()
 }
 
+// ---- webServer mock：直接驱动插件注册的 API handler ----
+function makeApiCtx(coordinator) {
+  const registrations = []
+  const webServer = { register: (def) => { registrations.push(def); return () => {} } }
+  const ctx = {
+    get: (name) => (name === 'sessionPersistence' ? { coordinator } : name === 'webServer' ? webServer : void 0),
+    on: () => () => {},
+    inject: (deps, cb) => {
+      if (deps[0] === 'sessionPersistence') cb({ get: () => ({ coordinator }) })
+      if (deps[0] === 'webServer') cb({ get: () => webServer })
+    },
+    effect: (gen) => { const it = gen(); const step = (r) => { const { value, done } = it.next(r); if (!done) step(value) }; step() },
+    sessions: { get: () => void 0, list: () => [] },
+    logger: { warn: () => {} },
+  }
+  return { ctx, handler: () => registrations[0]?.handler }
+}
+
+async function callApi(handler, path, bodyObj) {
+  const listeners = {}
+  const out = { status: 0, body: '' }
+  const req = {
+    method: 'POST',
+    url: path,
+    headers: { host: '127.0.0.1:3080' },
+    setEncoding: () => {},
+    on: (ev, cb) => { listeners[ev] = cb },
+    destroy: () => {},
+  }
+  const res = {
+    writeHead: (status) => { out.status = status },
+    end: (str) => { out.body = String(str ?? '') },
+  }
+  const pending = handler()(req, res)
+  listeners.data?.(JSON.stringify(bodyObj ?? {}))
+  listeners.end?.()
+  await pending
+  return out
+}
+
+// 用例 5：dispose 恢复原 capacity
+{
+  const prep = makePreparations(5, 5)
+  const coordinator = makeCoordinator(prep)
+  const dispose = plugin.apply(makeCtx(coordinator))
+  await new Promise((r) => setTimeout(r, 50))
+  check('capacity lowered while active', prep.capacity === 1, `capacity=${prep.capacity}`)
+  dispose()
+  check('dispose restores original capacity', prep.capacity === 5, `capacity=${prep.capacity}`)
+}
+
+// 用例 6：config.set 运行时关闭 preparedCacheTrim → 即时恢复官方 capacity
+{
+  const prep = makePreparations(5, 5)
+  const coordinator = makeCoordinator(prep)
+  const { ctx, handler } = makeApiCtx(coordinator)
+  const dispose = plugin.apply(ctx)
+  await new Promise((r) => setTimeout(r, 50))
+  check('trimmed at boot', prep.capacity === 1, `capacity=${prep.capacity}`)
+  const out = await callApi(handler, '/dsh-large-proj-perf/api/config.set', { preparedCacheTrim: false })
+  check('config.set accepted', out.status === 200 && JSON.parse(out.body).ok === true)
+  check('runtime disable restores capacity', prep.capacity === 5, `capacity=${prep.capacity}`)
+  dispose()
+}
+
+// 用例 7：config.set 数值下限钳制（materializeChunkEvents<=0 曾致死循环）
+{
+  const prep = makePreparations(1, 1)
+  const coordinator = makeCoordinator(prep)
+  const { ctx, handler } = makeApiCtx(coordinator)
+  const dispose = plugin.apply(ctx)
+  await new Promise((r) => setTimeout(r, 50))
+  const out = await callApi(handler, '/dsh-large-proj-perf/api/config.set', {
+    materializeChunkEvents: 0,
+    chunkSize: -5,
+    preparedCacheSize: 3,
+    zeroCopyFork: false,
+    notAKey: 123,
+  })
+  check('config.set accepted', out.status === 200)
+  const cfg = JSON.parse(out.body).value
+  check('materializeChunkEvents clamped to >=1000', cfg.materializeChunkEvents >= 1000, `value=${cfg.materializeChunkEvents}`)
+  check('chunkSize clamped to >=1', cfg.chunkSize >= 1, `value=${cfg.chunkSize}`)
+  check('valid numbers pass through', cfg.preparedCacheSize === 3)
+  check('booleans pass through', cfg.zeroCopyFork === false)
+  check('unknown keys ignored', !('notAKey' in cfg))
+  check('retrim applied on preparedCacheSize change', prep.capacity === 3, `capacity=${prep.capacity}`)
+  dispose()
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)
