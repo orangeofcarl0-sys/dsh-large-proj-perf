@@ -1,7 +1,7 @@
 # dsh-large-proj-perf
 
 [![Version](https://img.shields.io/badge/version-1.1.1-blue)]()
-[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6-green)]()
+[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6%2Frc.7-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、投影分片预热、分片 materialize，
@@ -9,10 +9,13 @@ DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、投影分片�
 
 > ⚠️ **版本兼容性警告**：本插件通过 monkey-patch dsh 内部方法实现（`SessionStore.fork`、
 > `PersistenceCoordinator.initFor`、`JsonlSessionPersistence.encodeMaterialization`、
-> `SessionPreparations` 等），**与 dsh 版本高度耦合**，当前针对 `0.1.0-rc.6` 开发并验证。
+> `SessionPreparations` 等），**与 dsh 版本高度耦合**，当前针对 `0.1.0-rc.6` / `0.1.0-rc.7`
+> 开发并验证（rc.7 已逐一核对：fork/prepare/fromRestore、initFor、encodeMaterialization
+> 与 toHeaderLine 字段集、SessionPreparations、投影注册表/缓存接口均无结构变化）。
 > dsh 升级后这些内部方法签名可能变化——所有补丁都带源码特征校验，不匹配时**自动跳过
-> 优化并回退官方行为**（不会导致崩溃），但优化会静默失效。升级 dsh 后请确认启动日志
-> 无 `signature mismatch` 告警，必要时重新适配本插件。
+> 优化并回退官方行为**（不会导致崩溃），但优化会静默失效。升级 dsh 后请跑
+> `node tests/verify_compat.mjs`（真实源码特征断言）并确认启动日志无
+> `signature mismatch` 告警，必要时重新适配本插件。
 
 > ⚠️ **能力边界（重要）**：本插件只能**缓解**超大对话的性能/内存问题（分片、零拷贝、
 > LRU 裁剪、预热等），**无法彻底解决**。根本原因在 dsh 的架构——live 会话事件树全量
@@ -166,13 +169,17 @@ npm test   # 或单独跑：node tests/smoke_fork.mjs
 - `tests/test_chunked_materialize.mjs`（5 断言）：分片多帧解码等价 / 阈值不变 —— ALL PASS
 - `tests/test_cache_trim.mjs`（17 断言）：LRU 裁剪 / dispose 恢复 capacity / 运行时
   开关 / config.set 数值钳制 —— ALL PASS
+- `tests/verify_compat.mjs`（16 断言）：对**真实安装的 dsh 源码**做特征断言——
+  fork/initFor/encodeMaterialization/toHeaderLine 字段集/SessionPreparations/
+  投影注册表与缓存接口/`packChunkRuns` 导出；版本不在已知列表时打 WARN
 
 ## 局限
 
-- **版本高度耦合（重要）**：补丁绑定 rc.6 内部结构（`_forkSeed`、
+- **版本高度耦合（重要）**：补丁绑定 dsh 内部结构（`_forkSeed`、
   `initFor`/`encodeMaterialization` 源码特征、`SessionPreparations.capacity` 等）。
-  dsh 大版本升级后，特征校验会自动跳过优化并回退官方行为（不崩溃、不误补），
-  但**优化会静默失效**——升级后务必确认启动日志无 `signature mismatch`，并按需
+  已在 `0.1.0-rc.6` / `0.1.0-rc.7` 上验证；dsh 升级后，特征校验会自动跳过优化并
+  回退官方行为（不崩溃、不误补），但**优化会静默失效**——升级后务必跑
+  `node tests/verify_compat.mjs`（或确认启动日志无 `signature mismatch`），并按需
   重新适配。本插件不适合在 dsh 版本频繁变动时依赖其优化。
 - `enqueue` 的逐事件 `structuredClone`（fork 第三次拷贝）在插件层无法安全消除——
   它在 write-behind 闭包内部，且承担"persistence 独立于生产者"的所有权语义。根治需

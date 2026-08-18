@@ -22,7 +22,7 @@ param([switch]$Remove)
 
 $ErrorActionPreference = 'Continue'
 $log = '[dsh-link]'
-$ExpectedDshVersion = '0.1.0-rc.6'   # 插件开发验证所用的 dsh 版本
+$KnownDshVersions = @('0.1.0-rc.6', '0.1.0-rc.7')   # 插件开发验证过的 dsh 版本
 
 $DshRoot = Join-Path $env:APPDATA 'npm\node_modules\@deepseek-ai\dsh'
 $DshInternal = Join-Path $DshRoot 'node_modules\@deepseek-ai'
@@ -50,8 +50,8 @@ if (-not (Test-Path $DshInternal)) {
 try {
   $dshPkg = Get-Content (Join-Path $DshRoot 'package.json') -Raw | ConvertFrom-Json
   Write-Host "$log dsh version: $($dshPkg.version)"
-  if ($dshPkg.version -ne $ExpectedDshVersion) {
-    Write-Host "$log WARNING: plugin targets dsh $ExpectedDshVersion; patches may be skipped on this version"
+  if ($KnownDshVersions -notcontains $dshPkg.version) {
+    Write-Host "$log WARNING: plugin verified on dsh $($KnownDshVersions -join '/'); run tests/verify_compat.mjs on this version"
   }
 } catch { }
 
