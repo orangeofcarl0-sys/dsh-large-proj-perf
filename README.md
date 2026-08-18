@@ -13,9 +13,12 @@ DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、投影分片�
 > 开发并验证（rc.7 已逐一核对：fork/prepare/fromRestore、initFor、encodeMaterialization
 > 与 toHeaderLine 字段集、SessionPreparations、投影注册表/缓存接口均无结构变化）。
 > dsh 升级后这些内部方法签名可能变化——所有补丁都带源码特征校验，不匹配时**自动跳过
-> 优化并回退官方行为**（不会导致崩溃），但优化会静默失效。升级 dsh 后请跑
-> `node tests/verify_compat.mjs`（真实源码特征断言）并确认启动日志无
-> `signature mismatch` 告警，必要时重新适配本插件。
+> 优化并回退官方行为**（不会导致崩溃），但优化会静默失效。
+>
+> **运行时版本探针**：插件启动时自动探测 dsh 实际版本——已知版本（rc.6/rc.7）打
+> `dsh version: x.y.z (verified)`，列表外版本打告警并提示跑 `tests/verify_compat.mjs`。
+> 版本也经 `stats.get` 暴露（`value.dshVersion`）。升级 dsh 后请确认启动日志无告警
+> 与 `signature mismatch`，必要时重新适配本插件。
 
 > ⚠️ **能力边界（重要）**：本插件只能**缓解**超大对话的性能/内存问题（分片、零拷贝、
 > LRU 裁剪、预热等），**无法彻底解决**。根本原因在 dsh 的架构——live 会话事件树全量
@@ -37,6 +40,25 @@ dsh `0.1.0-rc.6` 在大会话（数十万事件）上存在三类同步阻塞，
 **为什么「单个会话没事、fork 后出事」**：普通会话持久化走增量 `appendLines`
 （每次序列化几十个事件），而 fork 子会话是全新 id，走 `materialize` 全量序列化
 整个 seed——这是唯一会一次性序列化整条日志的路径。
+
+## rc.7 上游修了什么（为什么根因仍在）
+
+dsh `0.1.0-rc.7` 的发布说明里有一条长对话相关修复：「修复大历史消息分页栈溢出」
+（commit `5201b848`，PR #1371）。**插件已逐一核对 rc.7 的补丁点结构，无任何变化**，
+但这条修复值得单独说明：
+
+- **修了什么**：`session.history` 分页时用 `Math.min(event.seq, ...sourceEventSeqs)`
+  展开溯源数组。一条定稿的 assistant 消息可以通过 `sourceEventSeqs` 引用**数十万个**
+  流式分片，展开超出 JS 引擎函数参数上限（~65535），历史分页请求直接 HTTP 500。
+  修复改为循环逐项扫描取最小 seq（复杂度仍线性），分页语义不变，并加了拒绝参数
+  展开的回归测试。
+- **为什么没解决根因**：上游问题笔记明确声明「本决策不限制历史记录页面的字节大小，
+  也不限制浏览器回放该页面的开销；这两项性能问题仍与服务端调用栈故障分开处理」。
+  这是 `api-proxy` 层（host 侧）对**已全量解码事件列表**的切片逻辑——历史加载的
+  zstd 全量解码 + 逐事件深拷贝、live 会话事件树全量驻留（~700MB/会话）等架构根因
+  一个都没碰。修复的是「大会话历史 API 能正常返回」的可用性，本插件解决的是
+  「后端加载/fork 不冻结事件循环、不 OOM」的性能，两者互补，根因仍依赖上游做
+  事件流式解码与按需驻留（另见「能力边界」与「避免超长对话」）。
 
 ## 方案
 
@@ -136,7 +158,8 @@ dsh plugin --profile web add github:orangeofcarl0-sys/dsh-fresh-start
 
 `POST http://127.0.0.1:3080/dsh-large-proj-perf/api/<method>`：
 
-- `stats.get` — fork 次数/零拷贝占比/回退、预热计数、补行计数、最近记录
+- `stats.get` — dsh 版本探针（`dshVersion`）、fork 次数/零拷贝占比/回退、
+  预热计数、补行计数、最近记录
 - `stats.reset` — 清零
 - `config.get` / `config.set` — 运行时开关，`config.set` 同时写 settings 持久化；
   数值项带下限钳制（如 `materializeChunkEvents ≥ 1000`、`chunkSize ≥ 1`），

@@ -169,5 +169,20 @@ async function callApi(handler, path, bodyObj) {
   dispose()
 }
 
+// 用例 8：版本探针——stats.get 暴露 dshVersion（测试环境 junction 无顶层
+// @deepseek-ai/dsh，走 dsh-session 反推路径）
+{
+  const prep = makePreparations(1, 1)
+  const coordinator = makeCoordinator(prep)
+  const { ctx, handler } = makeApiCtx(coordinator)
+  const dispose = plugin.apply(ctx)
+  await new Promise((r) => setTimeout(r, 50))
+  const out = await callApi(handler, '/dsh-large-proj-perf/api/stats.get', {})
+  const version = JSON.parse(out.body).value.dshVersion
+  check('stats.get exposes dshVersion probe', typeof version === 'string' && version !== '',
+    `version=${version}`)
+  dispose()
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)
