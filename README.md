@@ -34,7 +34,7 @@ dsh `0.1.0-rc.6` 在大会话（数十万事件）上存在三类同步阻塞，
 
 | 问题 | 环节 | 实测 |
 |---|---|---|
-| A. fork 深拷贝 | `Session` 构造器逐事件 `snapshotJsonValue`（纯 JS 深拷贝）+ persistence `initFor` 的 `structuredClone(seed)` | 18.2MB/20k 事件合计 ~480ms 同步阻塞 |
+| A. fork 深拷贝 | `Session` 构造器逐事件 `snapshotJsonValue`（纯 JS 深拷贝）+ persistence `initFor` 的 `structuredClone(seed)` | 18.2MB/20k 事件合计 ~480ms 同步阻塞（rc.8 已原生消除其中 `initFor` 那次，构造器深拷贝仍在） |
 | B. projection 冷折叠 | `SessionProjectionRegistry.cellFor()` 冷时同步 `buildCell` 全量折叠 | 74 万事件冷折叠阻塞 20+ 分钟（100% 单核） |
 | C. fork 全量序列化 | fork 子会话首次落盘 `encodeMaterialization` → `eventLines` = `map(JSON.stringify).join("\n")` 一次性序列化整个 seed | 60 万事件 = 501MB 单字符串；74 万事件直接 `RangeError: Invalid string length` |
 
@@ -58,8 +58,11 @@ dsh `0.1.0-rc.6` 在大会话（数十万事件）上存在三类同步阻塞，
 改为直接引用 `session.events`（**上游原生实现了本插件的 fastInitFor 优化**，连插件
 补丁的 `slice()` 都比它多一次拷贝）。另「改善 SQLite 后端读写与分叉性能并降低存储
 体积，数据结构不兼容」在 `dsh-session-query-sqlite`（插件不涉及 SQLite 后端，无影响）。
-零拷贝 fork 的 **A 类深拷贝（fork 构造器 + initFor 双深拷贝）至此被上游全部原生消除**，
-但 B/C 类（投影冷折叠、fork 全量序列化）与历史加载的根因仍在，插件继续兜底。
+注意：这**只消除了 A 类的一半**——fork 流程的两个深拷贝里，`initFor` 那次被上游
+原生消除（fastInitFor 补丁退役），但 **fork 构造器逐事件的 `snapshotJsonValue` 深拷贝
+仍在**（rc.8 源码核实），它正是 `zeroCopyFork` 补丁走 `fromRestore` 通道绕过的核心，
+在 rc.8 上仍然必要。B/C 类（投影冷折叠、fork 全量序列化）与历史加载的根因同样仍在，
+插件继续兜底。
 
 两版修复都是「可用性 / 单一热点」层面，未触碰架构根因：历史加载仍是 zstd 全量解码
 + 逐事件深拷贝，live 会话事件树仍全量驻留（~700MB/会话）。根治仍依赖上游做事件
@@ -71,6 +74,8 @@ dsh `0.1.0-rc.6` 在大会话（数十万事件）上存在三类同步阻塞，
    不可变纯 JSON 树。补丁改走 `Session.prepare(..., { seedSource: 'persistence' })`
    的 `fromRestore` 通道——原地冻结复用引用，跳过整树深拷贝（346ms → 19ms）。
    子会话 header（`parentSession`/`seedLength`/`cwd`）与官方 fork 逐字段一致。
+   **rc.8 起仍必要**：上游只原生消除了 `initFor` 那次拷贝，fork 构造器的
+   `snapshotJsonValue` 深拷贝依旧存在（rc.8 源码核实）。
 2. **fast init-for**（`fastInitFor`，A）：`PersistenceCoordinator.initFor` 里那次
    `structuredClone(seed)` 替换为冻结引用复用（135ms → ~0ms）。带 rc.6 源码特征
    校验（`structuredClone(e)` 标记），内部结构不匹配时自动跳过并告警。**rc.8 起上游
@@ -191,14 +196,14 @@ npm test   # 或单独跑：node tests/smoke_fork.mjs
 - `tests/smoke_fork.mjs`（17 断言）：官方 fork 基线 / 零拷贝 fork 功能等价 /
   header 平价（含 origin 不继承）/ seed 前缀逐字节等价 /
   dispose 还原 / 版本漂移回退 —— ALL PASS
-- `tests/test_fast_initfor.mjs`（8 断言）：initFor 补丁安装 / 源码特征漂移跳过 /
-  无 persistence 服务存活 —— ALL PASS
+- `tests/test_fast_initfor.mjs`（10 断言）：initFor 补丁安装 / 源码特征漂移跳过 /
+  无 persistence 服务存活 / rc.8 上游原生零拷贝形态 → 补丁预期退役（不误报）—— ALL PASS
 - `tests/smoke_warmup.mjs`（11 断言）：分片预热与同步折叠一致 / checkpoint 基线 /
   并发 drive 让位 / dispose 中止 —— ALL PASS
 - `tests/test_backfill.mjs`（8 断言）：fork 回填 / 磁盘冷会话补行 —— ALL PASS
 - `tests/test_chunked_materialize.mjs`（5 断言）：分片多帧解码等价 / 阈值不变 —— ALL PASS
-- `tests/test_cache_trim.mjs`（17 断言）：LRU 裁剪 / dispose 恢复 capacity / 运行时
-  开关 / config.set 数值钳制 —— ALL PASS
+- `tests/test_cache_trim.mjs`（18 断言）：LRU 裁剪 / dispose 恢复 capacity / 运行时
+  开关 / config.set 数值钳制 / 版本探针（stats.get 暴露 `dshVersion`）—— ALL PASS
 - `tests/verify_compat.mjs`（16 断言）：对**真实安装的 dsh 源码**做特征断言——
   fork/initFor/encodeMaterialization/toHeaderLine 字段集/SessionPreparations/
   投影注册表与缓存接口/`packChunkRuns` 导出；版本不在已知列表时打 WARN
