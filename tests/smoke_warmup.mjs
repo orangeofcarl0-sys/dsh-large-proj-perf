@@ -214,9 +214,10 @@ function makeCtx({ registry, sessions }) {
   const sessions = new Map([['s4', session]])
   const ctx2 = makeCtx({ registry, sessions })
   const dispose = plugin.apply(ctx2)
-  // 预热首片后 yield（setImmediate），setTimeout(1) 在下一轮 timers 触发，
-  // 此时折叠远未完成（60 片），删除会话 → 下一次片头检查中止
-  await new Promise((r) => setTimeout(r, 1))
+  // 确定性地等首片折完（applyCalls >= chunkSize 表示已越过首个让位点并挂起），
+  // 再删除会话——下一次片头检查必须中止。固定 setTimeout 与 setImmediate
+  // 的竞争时序不可靠（不同环境/负载下翻转）。
+  for (let i = 0; i < 100 && applyCalls < 5000; i++) await new Promise((r) => setTimeout(r, 1))
   sessions.delete('s4') // 模拟 dispose（下一次片头检查应中止）
   await new Promise((r) => setTimeout(r, 300))
   const cell = registry.registrations.get('slow')?.cells.get(session)

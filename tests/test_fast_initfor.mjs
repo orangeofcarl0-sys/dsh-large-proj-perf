@@ -87,6 +87,38 @@ const plugin = await import('../lib/index.js')
   dispose()
 }
 
+// ---- 用例 2b：rc.8 上游原生零拷贝形态 → 跳过且不打 error（预期退役） ----
+{
+  const coordinator = {
+    live: new Map(),
+    preparations: { reservationFor: () => void 0 },
+    createWriteBehind: (session, ready) => ({ enqueue: () => {}, flush: async () => {}, hasWork: false }),
+    serialize: async (id, op) => op(),
+    onCreated: async () => {},
+    // 复刻 rc.8 initFor：seed 直接引用 session.events，无 structuredClone
+    initFor: function (session) {
+      const existing = this.live.get(session)
+      if (existing) return existing
+      const seed = session.events
+      const live = { init: Promise.resolve(), writes: this.createWriteBehind(session, () => live.init) }
+      this.live.set(session, live)
+      live.init = this.serialize(session.header.id, () => this.onCreated(session, seed))
+      live.init.catch(() => {})
+      return live
+    },
+  }
+  const errors = []
+  const origErr = console.error
+  console.error = (...a) => { errors.push(a.join(' ')) }
+  const dispose = plugin.apply({ ...makeCtx({ sessionPersistence: { coordinator } }), sessions: {} })
+  console.error = origErr
+  check('rc.8 native zero-copy: patch not installed', !Object.prototype.hasOwnProperty.call(coordinator, 'initFor') || String(coordinator.initFor).includes('const seed = session.events'))
+  // mock 环境无 sessions 服务，zero-copy fork 会打无关的 error——只断言无 initFor 相关错误
+  const initForErrors = errors.filter((e) => e.includes('initFor'))
+  check('rc.8 native zero-copy: no initFor error (retired, not drift)', initForErrors.length === 0, `errors=${initForErrors.length}`)
+  dispose()
+}
+
 // ---- 用例 3：无 persistence 服务 → 跳过 ----
 {
   const dispose = plugin.apply({ ...makeCtx({}), sessions: {} })

@@ -1,7 +1,7 @@
 # dsh-large-proj-perf
 
 [![Version](https://img.shields.io/badge/version-1.1.1-blue)]()
-[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6%2Frc.7-green)]()
+[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..rc.8-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、投影分片预热、分片 materialize，
@@ -9,13 +9,14 @@ DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、投影分片�
 
 > ⚠️ **版本兼容性警告**：本插件通过 monkey-patch dsh 内部方法实现（`SessionStore.fork`、
 > `PersistenceCoordinator.initFor`、`JsonlSessionPersistence.encodeMaterialization`、
-> `SessionPreparations` 等），**与 dsh 版本高度耦合**，当前针对 `0.1.0-rc.6` / `0.1.0-rc.7`
-> 开发并验证（rc.7 已逐一核对：fork/prepare/fromRestore、initFor、encodeMaterialization
-> 与 toHeaderLine 字段集、SessionPreparations、投影注册表/缓存接口均无结构变化）。
+> `SessionPreparations` 等），**与 dsh 版本高度耦合**，当前针对 `0.1.0-rc.6` / `rc.7` / `rc.8`
+> 开发并验证（rc.7 逐一核对无结构变化；rc.8 仅一处变更且是**上游原生实现了
+> 插件的 fastInitFor 优化**——`initFor` 的 seed 从 `structuredClone` 深拷贝改为直接
+> 引用 `session.events`，插件该补丁在 rc.8 上**预期退役**，其余补丁点结构不变）。
 > dsh 升级后这些内部方法签名可能变化——所有补丁都带源码特征校验，不匹配时**自动跳过
 > 优化并回退官方行为**（不会导致崩溃），但优化会静默失效。
 >
-> **运行时版本探针**：插件启动时自动探测 dsh 实际版本——已知版本（rc.6/rc.7）打
+> **运行时版本探针**：插件启动时自动探测 dsh 实际版本——已知版本（rc.6/rc.7/rc.8）打
 > `dsh version: x.y.z (verified)`，列表外版本打告警并提示跑 `tests/verify_compat.mjs`。
 > 版本也经 `stats.get` 暴露（`value.dshVersion`）。升级 dsh 后请确认启动日志无告警
 > 与 `signature mismatch`，必要时重新适配本插件。
@@ -41,24 +42,28 @@ dsh `0.1.0-rc.6` 在大会话（数十万事件）上存在三类同步阻塞，
 （每次序列化几十个事件），而 fork 子会话是全新 id，走 `materialize` 全量序列化
 整个 seed——这是唯一会一次性序列化整条日志的路径。
 
-## rc.7 上游修了什么（为什么根因仍在）
+## rc.7 / rc.8 上游修了什么（为什么根因仍在）
 
-dsh `0.1.0-rc.7` 的发布说明里有一条长对话相关修复：「修复大历史消息分页栈溢出」
-（commit `5201b848`，PR #1371）。**插件已逐一核对 rc.7 的补丁点结构，无任何变化**，
-但这条修复值得单独说明：
+**rc.7**：「修复大历史消息分页栈溢出」（commit `5201b848`，PR #1371）。
+`session.history` 分页时用 `Math.min(event.seq, ...sourceEventSeqs)` 展开溯源数组——
+一条定稿的 assistant 消息可以通过 `sourceEventSeqs` 引用**数十万个**流式分片，
+展开超出 JS 引擎函数参数上限（~65535），历史分页请求直接 HTTP 500。修复改为循环
+逐项扫描取最小 seq（复杂度仍线性），分页语义不变。上游问题笔记明确声明「本决策
+不限制历史记录页面的字节大小，也不限制浏览器回放该页面的开销」——这是 `api-proxy`
+层对**已全量解码事件列表**的切片逻辑，历史加载全量解码 + 逐事件深拷贝、live 事件树
+全量驻留等根因一个都没碰。
 
-- **修了什么**：`session.history` 分页时用 `Math.min(event.seq, ...sourceEventSeqs)`
-  展开溯源数组。一条定稿的 assistant 消息可以通过 `sourceEventSeqs` 引用**数十万个**
-  流式分片，展开超出 JS 引擎函数参数上限（~65535），历史分页请求直接 HTTP 500。
-  修复改为循环逐项扫描取最小 seq（复杂度仍线性），分页语义不变，并加了拒绝参数
-  展开的回归测试。
-- **为什么没解决根因**：上游问题笔记明确声明「本决策不限制历史记录页面的字节大小，
-  也不限制浏览器回放该页面的开销；这两项性能问题仍与服务端调用栈故障分开处理」。
-  这是 `api-proxy` 层（host 侧）对**已全量解码事件列表**的切片逻辑——历史加载的
-  zstd 全量解码 + 逐事件深拷贝、live 会话事件树全量驻留（~700MB/会话）等架构根因
-  一个都没碰。修复的是「大会话历史 API 能正常返回」的可用性，本插件解决的是
-  「后端加载/fork 不冻结事件循环、不 OOM」的性能，两者互补，根因仍依赖上游做
-  事件流式解码与按需驻留（另见「能力边界」与「避免超长对话」）。
+**rc.8**：「改善大历史会话执行分叉操作上的性能耗时」——落实在
+`PersistenceCoordinator.initFor`：seed 从 `session.events.map((e) => structuredClone(e))`
+改为直接引用 `session.events`（**上游原生实现了本插件的 fastInitFor 优化**，连插件
+补丁的 `slice()` 都比它多一次拷贝）。另「改善 SQLite 后端读写与分叉性能并降低存储
+体积，数据结构不兼容」在 `dsh-session-query-sqlite`（插件不涉及 SQLite 后端，无影响）。
+零拷贝 fork 的 **A 类深拷贝（fork 构造器 + initFor 双深拷贝）至此被上游全部原生消除**，
+但 B/C 类（投影冷折叠、fork 全量序列化）与历史加载的根因仍在，插件继续兜底。
+
+两版修复都是「可用性 / 单一热点」层面，未触碰架构根因：历史加载仍是 zstd 全量解码
++ 逐事件深拷贝，live 会话事件树仍全量驻留（~700MB/会话）。根治仍依赖上游做事件
+流式解码与按需驻留（另见「能力边界」与「避免超长对话」）。
 
 ## 方案
 
@@ -68,7 +73,9 @@ dsh `0.1.0-rc.7` 的发布说明里有一条长对话相关修复：「修复大
    子会话 header（`parentSession`/`seedLength`/`cwd`）与官方 fork 逐字段一致。
 2. **fast init-for**（`fastInitFor`，A）：`PersistenceCoordinator.initFor` 里那次
    `structuredClone(seed)` 替换为冻结引用复用（135ms → ~0ms）。带 rc.6 源码特征
-   校验（`structuredClone(e)` 标记），内部结构不匹配时自动跳过并告警。
+   校验（`structuredClone(e)` 标记），内部结构不匹配时自动跳过并告警。**rc.8 起上游
+   已原生实现（`const seed = session.events`），补丁预期退役**——特征缺失但检测到
+   上游零拷贝形态时打 info 说明，不再误报漂移。
 3. **投影分片预热**（`warmupEnabled`，B）：会话进入（created/resume）且事件数超过
    阈值时，抢在首次同步冷折叠前，分片重放 cells——每 `chunkSize` 个事件
    `setImmediate` 让出事件循环，折叠完成后直写 `registration.cells`（WeakMap），
@@ -200,7 +207,7 @@ npm test   # 或单独跑：node tests/smoke_fork.mjs
 
 - **版本高度耦合（重要）**：补丁绑定 dsh 内部结构（`_forkSeed`、
   `initFor`/`encodeMaterialization` 源码特征、`SessionPreparations.capacity` 等）。
-  已在 `0.1.0-rc.6` / `0.1.0-rc.7` 上验证；dsh 升级后，特征校验会自动跳过优化并
+  已在 `0.1.0-rc.6` / `rc.7` / `rc.8` 上验证；dsh 升级后，特征校验会自动跳过优化并
   回退官方行为（不崩溃、不误补），但**优化会静默失效**——升级后务必跑
   `node tests/verify_compat.mjs`（或确认启动日志无 `signature mismatch`），并按需
   重新适配。本插件不适合在 dsh 版本频繁变动时依赖其优化。

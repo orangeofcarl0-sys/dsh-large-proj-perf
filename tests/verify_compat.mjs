@@ -27,7 +27,7 @@ const dshRoot = join(dirname(sessionEntry), '..', '..', '..')
 const dshPkg = JSON.parse(readFileSync(join(dshRoot, 'package.json'), 'utf8'))
 
 // 插件开发/验证过的版本；不在列表里打 WARN（结构断言照跑，人工确认兼容性）
-const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7']
+const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8']
 console.log(`dsh version: ${dshPkg.version} (root: ${dshRoot})`)
 if (!KNOWN_VERSIONS.includes(dshPkg.version)) {
   warn(`dsh ${dshPkg.version} not in known list ${KNOWN_VERSIONS.join('/')}`, 'verify compatibility manually')
@@ -49,7 +49,12 @@ check('native fork meta field set unchanged',
 
 // ---- dsh-session-persistence：initFor 补丁 + 冷会话 LRU 裁剪 ----
 const persistSrc = src('dsh-session-persistence')
-check('initFor source-signature marker (structuredClone(e)) present', persistSrc.includes('structuredClone(e)'))
+const initForMarker = persistSrc.includes('structuredClone(e)')
+const initForNativeZeroCopy = persistSrc.includes('const seed = session.events')
+// 两种形态都接受：rc.6/rc.7 的 structuredClone 深拷贝（插件补丁可安装）；
+// rc.8+ 上游已原生零拷贝（const seed = session.events，补丁预期退役）
+check('initFor marker OR upstream native zero-copy', initForMarker || initForNativeZeroCopy,
+  initForMarker ? '(patch installable)' : '(upstream native; patch retired)')
 check('initFor internals present',
   ['reservationFor', 'attachPrepared', 'createWriteBehind', 'this.serialize(', 'this.onCreated('].every((m) => persistSrc.includes(m)))
 check('SessionPreparations structure (capacity/entries Map/ready phase) present',
