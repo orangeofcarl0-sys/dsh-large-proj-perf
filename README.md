@@ -1,7 +1,7 @@
 # dsh-large-proj-perf
 
 [![Version](https://img.shields.io/badge/version-1.1.1-blue)]()
-[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..rc.8-green)]()
+[![dsh](https://img.shields.io/badge/dsh-0.1.0..0.1.1--rc-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、投影分片预热、分片 materialize，
@@ -10,13 +10,14 @@ DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、投影分片�
 > ⚠️ **版本兼容性警告**：本插件通过 monkey-patch dsh 内部方法实现（`SessionStore.fork`、
 > `PersistenceCoordinator.initFor`、`JsonlSessionPersistence.encodeMaterialization`、
 > `SessionPreparations` 等），**与 dsh 版本高度耦合**，当前针对 `0.1.0-rc.6` / `rc.7` / `rc.8`
-> 开发并验证（rc.7 逐一核对无结构变化；rc.8 仅一处变更且是**上游原生实现了
-> 插件的 fastInitFor 优化**——`initFor` 的 seed 从 `structuredClone` 深拷贝改为直接
-> 引用 `session.events`，插件该补丁在 rc.8 上**预期退役**，其余补丁点结构不变）。
+> / `0.1.1-rc.1` 开发并验证（rc.7 逐一核对无结构变化；rc.8 仅一处变更且是**上游原生
+> 实现了插件的 fastInitFor 优化**——`initFor` 的 seed 从 `structuredClone` 深拷贝改为
+> 直接引用 `session.events`，插件该补丁在 rc.8 起**预期退役**；`0.1.1-rc.1` 发布说明
+> 无插件相关改动，结构断言与全套测试全过）。
 > dsh 升级后这些内部方法签名可能变化——所有补丁都带源码特征校验，不匹配时**自动跳过
 > 优化并回退官方行为**（不会导致崩溃），但优化会静默失效。
 >
-> **运行时版本探针**：插件启动时自动探测 dsh 实际版本——已知版本（rc.6/rc.7/rc.8）打
+> **运行时版本探针**：插件启动时自动探测 dsh 实际版本——已知版本（rc.6/rc.7/rc.8/0.1.1-rc.1）打
 > `dsh version: x.y.z (verified)`，列表外版本打告警并提示跑 `tests/verify_compat.mjs`。
 > 版本也经 `stats.get` 暴露（`value.dshVersion`）。升级 dsh 后请确认启动日志无告警
 > 与 `signature mismatch`，必要时重新适配本插件。
@@ -212,7 +213,7 @@ npm test   # 或单独跑：node tests/smoke_fork.mjs
 
 - **版本高度耦合（重要）**：补丁绑定 dsh 内部结构（`_forkSeed`、
   `initFor`/`encodeMaterialization` 源码特征、`SessionPreparations.capacity` 等）。
-  已在 `0.1.0-rc.6` / `rc.7` / `rc.8` 上验证；dsh 升级后，特征校验会自动跳过优化并
+  已在 `0.1.0-rc.6` / `rc.7` / `rc.8` / `0.1.1-rc.1` 上验证；dsh 升级后，特征校验会自动跳过优化并
   回退官方行为（不崩溃、不误补），但**优化会静默失效**——升级后务必跑
   `node tests/verify_compat.mjs`（或确认启动日志无 `signature mismatch`），并按需
   重新适配。本插件不适合在 dsh 版本频繁变动时依赖其优化。
