@@ -38,7 +38,8 @@
     "fork",
     "projection",
     "performance",
-    "materialize"
+    "materialize",
+    "dsh-std"
   ],
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"
