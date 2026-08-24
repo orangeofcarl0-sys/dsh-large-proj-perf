@@ -209,6 +209,8 @@ npm test   # 或单独跑：node tests/smoke_fork.mjs
 - `tests/verify_compat.mjs`（16 断言）：对**真实安装的 dsh 源码**做特征断言——
   fork/initFor/encodeMaterialization/toHeaderLine 字段集/SessionPreparations/
   投影注册表与缓存接口/`packChunkRuns` 导出；版本不在已知列表时打 WARN
+- `tests/test_manifest.mjs`（21 断言）：dsh-std Community v0.15 清单结构断言 /
+  entry 文件存在 / overrides 补丁点声明 / std-host facet 模块形态 —— ALL PASS
 
 ## 局限
 
@@ -257,13 +259,30 @@ permission: the mounted bash executor does not confine (no sandboxMode)
 `pwsh-sandbox`/`tool-pwsh`、还原 `dsh-permission-presets` 包），之后 dsh 升级不再
 需要重打补丁。
 
-## dsh-std 互操作标准（未来方向）
+## dsh-std 兼容（Community v0.15 清单已实现）
 
-[dsh-std](https://www.npmjs.com/package/dsh-std) 是 DSH 插件互操作标准的命名空间守卫包
-（`0.0.0-development`），目前**只导出开发状态（`phase: 'development'`），无任何 API**；
-稳定 API 将通过 `@dsh-std` 组织发布。因此**当前不存在可迁移的目标**。
+DSH 插件互操作标准已发布 rc：`@dsh-std/core` / `manifest` / `composition` / `sdk` /
+`lifecycle`（0.1.0-rc1，2026-08-18），核心是 **Community v0.15 的 `dsh-plugin.json`
+插件清单**（对象模型 + JSON Schema + 校验器，`parseManifest`/`validateManifest`）。
+本插件已提供标准兼容面，**双轨加载**：
 
-未来 `@dsh-std` 发布标准扩展点后，本插件的迁移方向（按上游痛点优先级）：
+- **当前 dsh（0.1.x）**：继续走 `cordis.patch.yml`（bundle patch）加载 `lib/index.js`，
+  行为不变。
+- **未来标准宿主**：按 `dsh-plugin.json` 加载——`facets.host.entry` 指向
+  `lib/std-host.js`（facet 激活模块：`activate`/`deactivate`/`snapshot`，形态与
+  `@dsh-std/sdk` 的 `defineFacet` 产物等价，但刻意不依赖 @dsh-std 运行时包）。
+  宿主若经协议提供 cordis 上下文（未来标准的 `cordis.dsh/v1alpha1 ContextProvider`
+  类钩子），激活时桥接 `lib/index.js` 的 `apply`；否则空激活（补丁不装，符合三层回退）。
+
+清单要点：`id`（反向域名）、`manifestVersion: "0.15"`、`$schema` 为 draft URN（不 fetch）、
+`compat.hosts` 声明已验证的 dsh 版本范围（rc.6 ~ 0.1.1-rc.2）、**`overrides` 如实声明
+五个补丁点**（fork/initFor/encodeMaterialization/SessionPreparations.capacity/
+投影 cells——kind 均为 `patch`），权限/命令/订阅为空数组。
+
+测试：`tests/test_manifest.mjs`（21 断言）对清单做结构断言并校验 entry 文件存在；
+环境装有 `@dsh-std/manifest` 时自动升级为官方 `validateManifest` 真校验。
+
+**未来迁移**（标准 API 落地后替换补丁，按上游痛点优先级）：
 
 1. **事件流式读取/按需驻留接口**——历史加载全量解码根因的官方通道；`backfill`/预热
    可改基于它，替代 `readRaw` 全量解码。

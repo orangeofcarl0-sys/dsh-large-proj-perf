@@ -8,7 +8,7 @@
     "node": ">=22.15.0"
   },
   "scripts": {
-    "test": "node tests/verify_compat.mjs && node tests/smoke_fork.mjs && node tests/test_fast_initfor.mjs && node tests/test_cache_trim.mjs && node tests/smoke_warmup.mjs && node tests/test_chunked_materialize.mjs && node tests/test_backfill.mjs"
+    "test": "node tests/verify_compat.mjs && node tests/test_manifest.mjs && node tests/smoke_fork.mjs && node tests/test_fast_initfor.mjs && node tests/test_cache_trim.mjs && node tests/smoke_warmup.mjs && node tests/test_chunked_materialize.mjs && node tests/test_backfill.mjs"
   },
   "exports": {
     ".": {
@@ -19,7 +19,8 @@
   "files": [
     "lib",
     "scripts",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "dsh-plugin.json"
   ],
   "license": "MIT",
   "repository": {

@@ -1,0 +1,57 @@
+{
+  "$schema": "urn:dsh-std:community-draft:dsh-plugin:0.15",
+  "manifestVersion": "0.15",
+  "id": "io.github.orangeofcarl0-sys.dsh-large-proj-perf",
+  "name": "dsh-large-proj-perf",
+  "version": "1.1.1",
+  "facets": {
+    "host": {
+      "entry": "lib/std-host.js",
+      "apiVersion": "v1alpha1"
+    }
+  },
+  "requires": {
+    "contracts": []
+  },
+  "permissions": [],
+  "contributes": {
+    "commands": []
+  },
+  "subscriptions": [],
+  "license": "MIT",
+  "source": {
+    "repository": "https://github.com/orangeofcarl0-sys/dsh-large-proj-perf"
+  },
+  "compat": {
+    "hosts": [
+      "@deepseek-ai/dsh 0.1.0-rc.6 - 0.1.1-rc.2"
+    ]
+  },
+  "overrides": [
+    {
+      "target": "SessionStore.prototype.fork",
+      "kind": "patch",
+      "description": "zero-copy fork via Session.prepare(seedSource:'persistence') fromRestore channel; skips the per-event snapshotJsonValue deep copy (346ms -> 19ms)"
+    },
+    {
+      "target": "PersistenceCoordinator.initFor",
+      "kind": "patch",
+      "description": "eliminates the structuredClone(seed) deep copy; retired on dsh >= 0.1.0-rc.8 where upstream natively reuses session.events"
+    },
+    {
+      "target": "JsonlSessionPersistence.encodeMaterialization",
+      "kind": "patch",
+      "description": "chunked zstd-frame materialization for fork children; removes the 500MB single-string / RangeError path"
+    },
+    {
+      "target": "SessionPreparations.capacity",
+      "kind": "patch",
+      "description": "cold-session LRU trim at runtime (5 -> preparedCacheSize, default 1; saves ~2.8GB); dispose restores the original capacity"
+    },
+    {
+      "target": "SessionProjectionRegistry.cells",
+      "kind": "patch",
+      "description": "chunked projection warmup writing hot cells ahead of the first synchronous cold fold (20min -> ~200ms on 740k events)"
+    }
+  ]
+}
