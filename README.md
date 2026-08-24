@@ -227,6 +227,36 @@ npm test   # 或单独跑：node tests/smoke_fork.mjs
 - 超大会话（70 万+ 事件）加载本身有内存 OOM 风险，与插件无关；建议配合
   [dsh-fresh-start](https://github.com/orangeofcarl0-sys/dsh-fresh-start) 主动归档。
 
+## 本地部署：bash 非沙箱 hack 与 dsh 升级（本机特有）
+
+本机 profile（`<DSH_HOME>/profiles/web/cordis.patch.yml`）配置了「bash 非沙箱执行器」
+hack（禁用 `bash-sandbox`/`pwsh-sandbox`、insert `@deepseek-ai/dsh-bash-local` 以使用
+WSL bash、显式 `defaultPreset: workspace-write`）。该 hack 依赖对
+`dsh-permission-presets` 包的**源码修改**——把 `ctx.shell.sandboxMode === void 0` 时的
+硬校验放宽为警告（修改处带 `[unconfined-bash hack]` 标记）。
+
+⚠️ **npm 全局更新 dsh（`npm i -g @deepseek-ai/dsh`）会把该包替换回官方原版，hack
+被冲掉**——重启后 dsh 直接无法启动：
+
+```
+permission: the mounted bash executor does not confine (no sandboxMode)
+```
+
+恢复步骤（重打包级补丁）：
+
+1. 编辑 `<npm全局目录>/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/
+   dsh-permission-presets/lib/index.js`；
+2. 把构造函数里的硬校验行（`if (ctx.shell.sandboxMode === void 0) throw new
+   Error("permission: the mounted bash executor does not confine ...")`）替换为
+   警告分支——形如：
+   `if (ctx.shell.sandboxMode === void 0) { console.warn("[dsh-permission-presets] [unconfined-bash hack] ..."); }`
+3. `node --check` 该文件确认语法，再重启 dsh。
+
+如需**放弃 bash hack、恢复官方受限沙箱**：按 `cordis.patch.yml` 内的恢复注释操作
+（`bash-sandbox` 改回 `disabled: false`、移除 `bash-local` insert、启用
+`pwsh-sandbox`/`tool-pwsh`、还原 `dsh-permission-presets` 包），之后 dsh 升级不再
+需要重打补丁。
+
 ## dsh-std 互操作标准（未来方向）
 
 [dsh-std](https://www.npmjs.com/package/dsh-std) 是 DSH 插件互操作标准的命名空间守卫包
