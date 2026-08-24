@@ -22,7 +22,7 @@ param([switch]$Remove)
 
 $ErrorActionPreference = 'Continue'
 $log = '[dsh-link]'
-$KnownDshVersions = @('0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1')   # 插件开发验证过的 dsh 版本
+$KnownDshVersions = @('0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2')   # 插件开发验证过的 dsh 版本
 
 $DshRoot = Join-Path $env:APPDATA 'npm\node_modules\@deepseek-ai\dsh'
 $DshInternal = Join-Path $DshRoot 'node_modules\@deepseek-ai'

@@ -13,11 +13,12 @@ DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、投影分片�
 > / `0.1.1-rc.1` 开发并验证（rc.7 逐一核对无结构变化；rc.8 仅一处变更且是**上游原生
 > 实现了插件的 fastInitFor 优化**——`initFor` 的 seed 从 `structuredClone` 深拷贝改为
 > 直接引用 `session.events`，插件该补丁在 rc.8 起**预期退役**；`0.1.1-rc.1` 发布说明
-> 无插件相关改动，结构断言与全套测试全过）。
+> 无插件相关改动，结构断言与全套测试全过；`0.1.1-rc.2` 仅图像上传/预处理改动，
+> 五个补丁点子包与 rc.1 逐字节相同）。
 > dsh 升级后这些内部方法签名可能变化——所有补丁都带源码特征校验，不匹配时**自动跳过
 > 优化并回退官方行为**（不会导致崩溃），但优化会静默失效。
 >
-> **运行时版本探针**：插件启动时自动探测 dsh 实际版本——已知版本（rc.6/rc.7/rc.8/0.1.1-rc.1）打
+> **运行时版本探针**：插件启动时自动探测 dsh 实际版本——已知版本（rc.6/rc.7/rc.8/0.1.1-rc.1/rc.2）打
 > `dsh version: x.y.z (verified)`，列表外版本打告警并提示跑 `tests/verify_compat.mjs`。
 > 版本也经 `stats.get` 暴露（`value.dshVersion`）。升级 dsh 后请确认启动日志无告警
 > 与 `signature mismatch`，必要时重新适配本插件。
@@ -225,3 +226,23 @@ npm test   # 或单独跑：node tests/smoke_fork.mjs
   根治需上游把 `readFromCore`/`loadStored` 改成分片让出事件循环。
 - 超大会话（70 万+ 事件）加载本身有内存 OOM 风险，与插件无关；建议配合
   [dsh-fresh-start](https://github.com/orangeofcarl0-sys/dsh-fresh-start) 主动归档。
+
+## dsh-std 互操作标准（未来方向）
+
+[dsh-std](https://www.npmjs.com/package/dsh-std) 是 DSH 插件互操作标准的命名空间守卫包
+（`0.0.0-development`），目前**只导出开发状态（`phase: 'development'`），无任何 API**；
+稳定 API 将通过 `@dsh-std` 组织发布。因此**当前不存在可迁移的目标**。
+
+未来 `@dsh-std` 发布标准扩展点后，本插件的迁移方向（按上游痛点优先级）：
+
+1. **事件流式读取/按需驻留接口**——历史加载全量解码根因的官方通道；`backfill`/预热
+   可改基于它，替代 `readRaw` 全量解码。
+2. **fork seed 快照接口**——`zeroCopyFork` 的官方通道，替代 `fromRestore` 私有通道与
+   能力探测。
+3. **投影预热/缓存接口**——替代直写 `registration.cells`（WeakMap）的 hack。
+4. **persistence 生命周期钩子**——替代 `initFor`/`encodeMaterialization` 补丁。
+
+迁移策略建议为「**标准 API 优先、现有补丁兜底**」的双轨：标准 API 可用时消费契约接口
+（特征校验、版本列表、verify_compat 探针随之退役），缺失时回退现有补丁——插件的三层
+回退架构本身就是这个接缝。本插件的 `engines >=22.15.0` 与 dsh-std 的 `^22.19 || >=24`
+有重叠；一旦消费 dsh-std，需同步提高 engines 声明。
