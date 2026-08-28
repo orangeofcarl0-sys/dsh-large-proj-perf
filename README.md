@@ -1,6 +1,6 @@
 # dsh-large-proj-perf
 
-[![Version](https://img.shields.io/badge/version-1.1.1-blue)]()
+[![Version](https://img.shields.io/badge/version-1.2.0-blue)]()
 [![dsh](https://img.shields.io/badge/dsh-0.1.0..0.1.1--rc-green)]()
 [![dsh-std](https://img.shields.io/badge/dsh--std-Community_v0.15-blue)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)

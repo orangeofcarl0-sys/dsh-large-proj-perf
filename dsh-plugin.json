@@ -3,7 +3,7 @@
   "manifestVersion": "0.15",
   "id": "io.github.orangeofcarl0-sys.dsh-large-proj-perf",
   "name": "dsh-large-proj-perf",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "facets": {
     "host": {
       "entry": "lib/std-host.js",
