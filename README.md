@@ -71,6 +71,20 @@ dsh `0.1.0-rc.6` 在大会话（数十万事件）上存在三类同步阻塞，
 + 逐事件深拷贝，live 会话事件树仍全量驻留（~700MB/会话）。根治仍依赖上游做事件
 流式解码与按需驻留（另见「能力边界」与「避免超长对话」）。
 
+### 上游吸收状态（插件存续依据，rc.2 源码核实）
+
+| 插件能力 | 上游 0.1.1-rc.2 状态 | 插件状态 |
+|---|---|---|
+| fastInitFor（initFor 深拷贝，~135ms） | **rc.8 已原生实现** | 已退役（自动跳过） |
+| zeroCopyFork（fork 构造器深拷贝，346ms→19ms） | `snapshotJsonValue(source)` 仍在 | **活跃** |
+| 投影分片预热（74 万事件 20min→200ms） | `cellFor` 仍同步全量 `buildCell` | **活跃** |
+| 分片 materialize（501MB 单串/RangeError） | `encodeMaterialization` 仍一次性全量序列化 | **活跃** |
+| 冷会话 LRU 裁剪（省 ~2.8GB） | 容量可配置但默认偏大 | **活跃** |
+
+运行时各补丁的实际状态经 `stats.get` 的 `patches` 字段暴露（`active`/`retired`/
+`inactive`/`off`）——上游每吸收一项能力，对应补丁自动转 `retired`（fastInitFor 是
+第一个实例），插件按项退役而非整体下线。全部转 `retired` 之日即插件退役之时。
+
 ## 方案
 
 1. **零拷贝 fork**（`zeroCopyFork`，A）：fork 的 seed 事件本就是 `deepFreeze`
@@ -173,8 +187,8 @@ dsh plugin --profile web add github:orangeofcarl0-sys/dsh-fresh-start
 
 `POST http://127.0.0.1:3080/dsh-large-proj-perf/api/<method>`：
 
-- `stats.get` — dsh 版本探针（`dshVersion`）、fork 次数/零拷贝占比/回退、
-  预热计数、补行计数、最近记录
+- `stats.get` — dsh 版本探针（`dshVersion`）、各补丁状态（`patches`：active/
+  retired/inactive/off）、fork 次数/零拷贝占比/回退、预热计数、补行计数、最近记录
 - `stats.reset` — 清零
 - `config.get` / `config.set` — 运行时开关，`config.set` 同时写 settings 持久化；
   数值项带下限钳制（如 `materializeChunkEvents ≥ 1000`、`chunkSize ≥ 1`），
@@ -205,8 +219,8 @@ npm test   # 或单独跑：node tests/smoke_fork.mjs
   并发 drive 让位 / dispose 中止 —— ALL PASS
 - `tests/test_backfill.mjs`（8 断言）：fork 回填 / 磁盘冷会话补行 —— ALL PASS
 - `tests/test_chunked_materialize.mjs`（5 断言）：分片多帧解码等价 / 阈值不变 —— ALL PASS
-- `tests/test_cache_trim.mjs`（18 断言）：LRU 裁剪 / dispose 恢复 capacity / 运行时
-  开关 / config.set 数值钳制 / 版本探针（stats.get 暴露 `dshVersion`）—— ALL PASS
+- `tests/test_cache_trim.mjs`（23 断言）：LRU 裁剪 / dispose 恢复 capacity / 运行时
+  开关 / config.set 数值钳制 / 版本探针（`dshVersion`）+ 补丁状态（`patches`）—— ALL PASS
 - `tests/verify_compat.mjs`（16 断言）：对**真实安装的 dsh 源码**做特征断言——
   fork/initFor/encodeMaterialization/toHeaderLine 字段集/SessionPreparations/
   投影注册表与缓存接口/`packChunkRuns` 导出；版本不在已知列表时打 WARN

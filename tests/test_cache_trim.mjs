@@ -169,8 +169,9 @@ async function callApi(handler, path, bodyObj) {
   dispose()
 }
 
-// 用例 8：版本探针——stats.get 暴露 dshVersion（测试环境 junction 无顶层
-// @deepseek-ai/dsh，走 dsh-session 反推路径）
+// 用例 8：版本探针 + 补丁状态——stats.get 暴露 dshVersion 与 patches
+// （测试环境 junction 无顶层 @deepseek-ai/dsh，走 dsh-session 反推路径；
+// mock coordinator 为 rc.6 形态 → fastInitFor 应为 active）
 {
   const prep = makePreparations(1, 1)
   const coordinator = makeCoordinator(prep)
@@ -178,9 +179,14 @@ async function callApi(handler, path, bodyObj) {
   const dispose = plugin.apply(ctx)
   await new Promise((r) => setTimeout(r, 50))
   const out = await callApi(handler, '/dsh-large-proj-perf/api/stats.get', {})
-  const version = JSON.parse(out.body).value.dshVersion
-  check('stats.get exposes dshVersion probe', typeof version === 'string' && version !== '',
-    `version=${version}`)
+  const value = JSON.parse(out.body).value
+  check('stats.get exposes dshVersion probe', typeof value.dshVersion === 'string' && value.dshVersion !== '',
+    `version=${value.dshVersion}`)
+  check('stats.get exposes patches status map', typeof value.patches === 'object' && value.patches !== null)
+  check('fastInitFor active on rc.6-shaped mock', value.patches.fastInitFor === 'active', `status=${value.patches.fastInitFor}`)
+  check('zeroCopyFork inactive without sessions service', value.patches.zeroCopyFork === 'inactive', `status=${value.patches.zeroCopyFork}`)
+  check('warmup active by config', value.patches.warmup === 'active', `status=${value.patches.warmup}`)
+  check('chunkedMaterialize inactive without persistence method', value.patches.chunkedMaterialize === 'inactive', `status=${value.patches.chunkedMaterialize}`)
   dispose()
 }
 
