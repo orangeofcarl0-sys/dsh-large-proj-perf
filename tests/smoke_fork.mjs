@@ -89,11 +89,14 @@ const check = (label, cond, extra = '') => {
   const nativeMs = performance.now() - t0
   // src.events 已含构造期追加的 end-seed；fork seed 复制全部事件，
   // 但 _forkSeed 截到 lastEvent，构造器再补一个新 end-seed → 数量相同
-  check('native fork works', child.events.length === src.events.length)
-  check('native fork header', child.header.parentSession === 'session-src1' && child.header.seedLength === src.events.length)
-  // rc.6 原生 fork 的 meta 只带 cwd/parentSession/seedLength——不继承 origin
+  const srcEvents = src.snapshotEvents()
+  const childEvents = child.snapshotEvents()
+  check('native fork works', childEvents.length === srcEvents.length)
+  check('native fork header', child.header.parentSession === 'session-src1' && child.header.isSeeded === true)
+  check('native fork header has no seedLength (alpha.5)', !('seedLength' in child.header))
+  // alpha.5 原生 fork 的 meta 只带 cwd/parentSession/isSeeded——不继承 origin
   check('native fork does not inherit origin', !('origin' in child.header))
-  console.log(`  native fork: ${nativeMs.toFixed(1)}ms, events=${child.events.length}`)
+  console.log(`  native fork: ${nativeMs.toFixed(1)}ms, events=${childEvents.length}`)
 }
 
 // ================= 用例 2：插件 apply → 零拷贝 fork → dispose =================
@@ -110,9 +113,11 @@ const check = (label, cond, extra = '') => {
   const child = store.fork('session-src2')
   const patchedMs = performance.now() - t0
 
-  check('zero-copy fork works', child.events.length === src.events.length)
+  const zeroChildEvents = child.snapshotEvents()
+  check('zero-copy fork works', zeroChildEvents.length === src.snapshotEvents().length)
   check('zero-copy fork header parent', child.header.parentSession === 'session-src2')
-  check('zero-copy fork header seedLength', child.header.seedLength === src.events.length)
+  check('zero-copy fork header isSeeded', child.header.isSeeded === true)
+  check('zero-copy fork header has no seedLength (alpha.5)', !('seedLength' in child.header))
   check('zero-copy fork cwd inherited', child.header.cwd === 'F:\\bench')
   // 官方 fork 本身不继承 agentPreset/delegationDepth/origin（已验证 rc.6 行为），
   // 插件行为与官方一致：
@@ -121,19 +126,19 @@ const check = (label, cond, extra = '') => {
   check('child in store', store.get(child.id) === child)
   // 深冻结：共享引用不可变
   let frozen = true
-  try { child.events[1].data.content[0].text = 'MUTATE' } catch { frozen = false }
+  try { zeroChildEvents[1].data.content[0].text = 'MUTATE' } catch { frozen = false }
   check('events deep-frozen (shared refs immutable)', !frozen)
   // 与官方产物逐事件 JSON 等价：seed 的最后一个事件是各源自带的 end-seed 标记
   // （建源时间戳不同），比对排除它——其余前缀来自共享 seedEvents，确定性数据
   const baselineEvents = makeStoreForkBaseline()
-  check('event stream length matches native', child.events.length === baselineEvents.length)
+  check('event stream length matches native', zeroChildEvents.length === baselineEvents.length)
   check('seed prefix byte-identical to native',
-    JSON.stringify(child.events.slice(0, child.header.seedLength - 1)) === JSON.stringify(baselineEvents.slice(0, child.header.seedLength - 1)))
+    JSON.stringify(zeroChildEvents.slice(0, child.header.inheritedEventCount - 1)) === JSON.stringify(baselineEvents.slice(0, child.header.inheritedEventCount - 1)))
   console.log(`  zero-copy fork: ${patchedMs.toFixed(1)}ms  (native baseline ~${'346ms @20k events / scaled'}`+`)`)
 
   // boundary fork（中途分叉）
   const midChild = store.fork('session-src2', 999)
-  check('boundary fork at seq 999', midChild.events.length === 1000 + 1 && midChild.header.seedLength === 1000)
+  check('boundary fork at seq 999', midChild.snapshotEvents().length === 1000 + 1 && midChild.header.isSeeded === true && midChild.inheritedEventCount === 1000)
 
   // open turn 保护：找 turn/start 未闭合点
   let openTurnErr = false
@@ -145,7 +150,7 @@ const check = (label, cond, extra = '') => {
   const t2 = performance.now()
   const child2 = store.fork('session-src2')
   const nativeMs2 = performance.now() - t2
-  check('dispose restores native fork', child2.events.length === src.events.length)
+  check('dispose restores native fork', child2.snapshotEvents().length === src.snapshotEvents().length)
   console.log(`  post-dispose fork: ${nativeMs2.toFixed(1)}ms`)
 }
 
@@ -154,7 +159,7 @@ function makeStoreForkBaseline() {
   const { ctx } = makeCtx(store)
   store.ctx = { ...store.ctx, effect: ctx.effect }
   const src = store.create('session-src-baseline', { seed: seedEvents, meta: { cwd: 'F:\\bench', delegationDepth: 0, agentPreset: 'code' } })
-  return store.fork('session-src-baseline').events
+  return store.fork('session-src-baseline').snapshotEvents()
 }
 
 // ================= 用例 3：能力缺失自动回退 =================
@@ -179,7 +184,7 @@ function makeStoreForkBaseline() {
   let child
   try { child = store.fork('session-src3') } catch (e) { child = void 0; console.error('  fallback threw:', e.message) }
   // 探测无法预知 prepare 会拒绝 restore；该场景由 try/catch 兜底转官方：
-  check('fallback to native on restore-channel drift', child !== void 0 && child.events.length === src.events.length)
+  check('fallback to native on restore-channel drift', child !== void 0 && child.snapshotEvents().length === src.snapshotEvents().length)
   proto.prepare = savedPrepare
   dispose()
 }

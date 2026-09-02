@@ -27,7 +27,7 @@ const dshRoot = join(dirname(sessionEntry), '..', '..', '..')
 const dshPkg = JSON.parse(readFileSync(join(dshRoot, 'package.json'), 'utf8'))
 
 // 插件开发/验证过的版本；不在列表里打 WARN（结构断言照跑，人工确认兼容性）
-const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2']
+const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2', '0.1.2-alpha.5']
 console.log(`dsh version: ${dshPkg.version} (root: ${dshRoot})`)
 if (!KNOWN_VERSIONS.includes(dshPkg.version)) {
   warn(`dsh ${dshPkg.version} not in known list ${KNOWN_VERSIONS.join('/')}`, 'verify compatibility manually')
@@ -43,18 +43,22 @@ check('fork internals (_resolveForkSource/_forkSeed/prepare/enter/announce) pres
 check('restore channel (seedSource persistence -> fromRestore) present',
   sessionSrc.includes('seedSource === "persistence"') && sessionSrc.includes('Session.fromRestore'))
 check('restored header validation present', sessionSrc.includes('validateRestoredSessionHeader'))
-// fork 的 meta 字段集：原生只带 cwd/parentSession/seedLength（零拷贝补丁复刻此集合）
+// fork 的 meta 字段集：alpha.5 起为 cwd/parentSession/isSeeded（seedLength 移入
+// options.inheritedEventCount）；零拷贝补丁复刻此集合
 check('native fork meta field set unchanged',
-  sessionSrc.includes('parentSession: liveSource.id') && sessionSrc.includes('seedLength: seed.length'))
+  sessionSrc.includes('parentSession: liveSource.id') && sessionSrc.includes('isSeeded: true'))
+check('inheritedEventCount option + SessionLogOffset export present (alpha.5 restore channel)',
+  sessionSrc.includes('inheritedEventCount') && sessionSrc.includes('SessionLogOffset'))
 
 // ---- dsh-session-persistence：initFor 补丁 + 冷会话 LRU 裁剪 ----
 const persistSrc = src('dsh-session-persistence')
 const initForMarker = persistSrc.includes('structuredClone(e)')
-const initForNativeZeroCopy = persistSrc.includes('const seed = session.events')
-// 两种形态都接受：rc.6/rc.7 的 structuredClone 深拷贝（插件补丁可安装）；
-// rc.8+ 上游已原生零拷贝（const seed = session.events，补丁预期退役）
-check('initFor marker OR upstream native zero-copy', initForMarker || initForNativeZeroCopy,
-  initForMarker ? '(patch installable)' : '(upstream native; patch retired)')
+const initForEventsRef = persistSrc.includes('const seed = session.events')
+const initForSnapshot = persistSrc.includes('session.snapshotEvents()')
+// 三种形态都接受：rc.6/rc.7 structuredClone 深拷贝（补丁可装）；rc.8 events 引用
+// 复用；alpha.5 snapshotEvents() 快照——后两者均为上游原生实现，补丁预期退役
+check('initFor marker OR upstream native seed source', initForMarker || initForEventsRef || initForSnapshot,
+  initForMarker ? '(patch installable)' : `(upstream native; patch retired: ${initForSnapshot ? 'snapshotEvents' : 'events ref'})`)
 check('initFor internals present',
   ['reservationFor', 'attachPrepared', 'createWriteBehind', 'this.serialize(', 'this.onCreated('].every((m) => persistSrc.includes(m)))
 check('SessionPreparations structure (capacity/entries Map/ready phase) present',
@@ -64,18 +68,22 @@ check('SessionPreparations structure (capacity/entries Map/ready phase) present'
 const jsonlSrc = src('dsh-session-persistence-jsonl')
 check('encodeMaterialization signature markers present',
   jsonlSrc.includes('eventLines(events, this.packChunks)') && jsonlSrc.includes('compressZstdFrame'))
+check('encodeMaterialization (storage, events) signature (alpha.5)', jsonlSrc.includes('encodeMaterialization(storage, events)'))
 check('encodeMaterialization delegates on compression=none', jsonlSrc.includes('this.compression === "none"'))
 
-// toHeaderLine 字段集：插件补丁逐字段复刻，新增字段必须同步——正则提取真实字段名对比
+// toHeaderLine(header, inheritedEventCount)：字段集对比——alpha.5 的 seedLength 是
+// isSeeded 条件字段（`header.isSeeded ? { seedLength: cut }`），正则同步提取
 const realFields = new Set()
 for (const m of jsonlSrc.matchAll(/\.\.\.header\.(\w+) !== void 0/g)) realFields.add(m[1])
 for (const m of jsonlSrc.matchAll(/header\.(\w+) \?\? /g)) realFields.add(m[1])
+for (const m of jsonlSrc.matchAll(/header\.isSeeded \? \{ (\w+)/g)) realFields.add(m[1])
 realFields.add('type'); realFields.add('version'); realFields.add('id'); realFields.add('createdAt')
 const pluginFields = ['type', 'version', 'id', 'createdAt', 'cwd', 'parentSession', 'seedLength', 'origin', 'delegationDepth', 'agentPreset']
 const missing = pluginFields.filter((f) => !realFields.has(f))
 const extra = [...realFields].filter((f) => !pluginFields.includes(f))
 check('toHeaderLine field set matches plugin replica', missing.length === 0 && extra.length === 0,
   `missing=${missing.join(',') || '-'} extra=${extra.join(',') || '-'}`)
+check('toHeaderLine takes inheritedEventCount (alpha.5)', jsonlSrc.includes('toHeaderLine(header, inheritedEventCount)'))
 
 // eventLines 用 packChunkRuns（插件降级路径的等价前提）
 check('eventLines packs via packChunkRuns', /function eventLines[\s\S]{0,200}packChunkRuns\(events\)/.test(jsonlSrc))
@@ -88,8 +96,13 @@ check('registry internals (registrations/cells WeakMap/cellFor/buildCell) presen
 
 // ---- dsh-session-projection-cache：回填/补行依赖 ----
 const cacheSrc = src('dsh-session-projection-cache')
-check('cache API (recordFor/write/putSoft) present',
-  ['recordFor(id, expected)', 'async write(session)', 'async putSoft(id, identity, rows, what)'].every((m) => cacheSrc.includes(m)))
+// alpha.5：putSoft(id, identity, rows, what) → put(id, identity, rows)；identity
+// 含 isSeeded/inheritedEventCount（identityOf）
+check('cache API (recordFor/write/put) present',
+  ['recordFor(id, expected)', 'async write(session)', 'async put(id, identity, rows)'].every((m) => cacheSrc.includes(m)))
+check('cache identity carries isSeeded/inheritedEventCount (alpha.5)',
+  cacheSrc.includes('identityOf(header, inheritedEventCount)') && cacheSrc.includes('isSeeded: header.isSeeded'))
+check('SessionLogOffset imported into cache package', cacheSrc.includes('SessionLogOffset'))
 
 // ---- 动态导出检查 ----
 const dshSession = await import('@deepseek-ai/dsh-session')

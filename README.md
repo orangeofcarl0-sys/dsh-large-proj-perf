@@ -12,7 +12,7 @@ DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、投影分片�
 
 ## 特性一览
 
-| 能力 | 解决什么 | 实测 | 状态（rc.2） |
+| 能力 | 解决什么 | 实测 | 状态（alpha.5） |
 |---|---|---|---|
 | 零拷贝 fork | fork 时逐事件深拷贝阻塞 | 346ms → 19ms | 活跃 |
 | 分片投影预热 | 打开历史会话的同步冷折叠冻结事件循环 | 74 万事件 20min → ~200ms | 活跃 |
@@ -62,22 +62,29 @@ try-catch / 配置开关）；dispose 完整还原。
 ## 与上游 dsh 的关系
 
 本插件通过 monkey-patch 内部方法实现，**与 dsh 版本高度耦合**。已在
-`0.1.0-rc.6` / `rc.7` / `rc.8` / `0.1.1-rc.1` / `rc.2` 上开发并验证。升级 dsh 后：
+`0.1.0-rc.6` / `rc.7` / `rc.8` / `0.1.1-rc.1` / `rc.2` / `0.1.2-alpha.5` 上开发并验证。
+升级 dsh 后：
 
 - 启动日志会显示 `dsh version: x.y.z (verified)`（探针）或列表外版本告警；
 - 跑 `node tests/verify_compat.mjs`（对真实安装源码做 16 项结构断言）；
 - 确认无 `signature mismatch` 告警——补丁不匹配时自动跳过（不崩溃），但优化
   会静默失效。
 
-上游已吸收 / 仍独有（rc.2 源码核实，详见 `stats.patches`）：
+上游已吸收 / 仍独有（alpha.5 源码核实，详见 `stats.patches`）：
 
-| 插件能力 | 上游 0.1.1-rc.2 状态 | 插件状态 |
+| 插件能力 | 上游 0.1.2-alpha.5 状态 | 插件状态 |
 |---|---|---|
-| fastInitFor | **rc.8 已原生实现** | 已退役 |
-| zeroCopyFork | `snapshotJsonValue(source)` 仍在 | 活跃 |
+| fastInitFor | **rc.8 起原生实现**（alpha.5 为 `snapshotEvents()`） | 已退役 |
+| zeroCopyFork | 构造器 `snapshotJsonValue(source)` 仍在；fork meta 变为 `isSeeded`+`inheritedEventCount`（已适配） | 活跃 |
 | 投影分片预热 | `cellFor` 仍同步全量 `buildCell` | 活跃 |
-| 分片 materialize | 仍一次性全量序列化 | 活跃 |
+| 分片 materialize | 仍一次性全量序列化（签名变为 `(storage, events)`，已适配） | 活跃 |
 | 冷会话 LRU 裁剪 | 容量可配置但默认偏大 | 活跃 |
+
+alpha.5 破坏性变更与适配：`Session.events` getter → `snapshotEvents()`；
+fork meta `seedLength` → `isSeeded: true` + options `inheritedEventCount`；
+`encodeMaterialization(meta, events)` → `(storage, events)`（header 需带
+`inheritedEventCount`）；投影缓存 identity 新增 `isSeeded`/`inheritedEventCount`
+（`putSoft` → `put`）。插件已全部适配。
 
 上游 rc.7 修复了历史分页栈溢出（可用性）、rc.8 优化了 SQLite 后端——均不与本插件
 重叠，也未触碰根因（历史加载全量解码、live 事件树全量驻留）。
