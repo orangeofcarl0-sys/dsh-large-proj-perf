@@ -27,7 +27,7 @@ const dshRoot = join(dirname(sessionEntry), '..', '..', '..')
 const dshPkg = JSON.parse(readFileSync(join(dshRoot, 'package.json'), 'utf8'))
 
 // 插件开发/验证过的版本；不在列表里打 WARN（结构断言照跑，人工确认兼容性）
-const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2', '0.1.2-alpha.5']
+const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2', '0.1.2-alpha.5', '0.1.2-rc.1']
 console.log(`dsh version: ${dshPkg.version} (root: ${dshRoot})`)
 if (!KNOWN_VERSIONS.includes(dshPkg.version)) {
   warn(`dsh ${dshPkg.version} not in known list ${KNOWN_VERSIONS.join('/')}`, 'verify compatibility manually')
