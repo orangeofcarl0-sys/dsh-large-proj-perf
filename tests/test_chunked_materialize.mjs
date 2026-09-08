@@ -122,5 +122,97 @@ const smallText = decodeAllFrames(smallBuf).toString('utf8')
 check('below-threshold unchanged (single frame)', smallText.startsWith('{"type":"session"') && smallText.split('\n').filter(Boolean).length === smallEvents.length + 1, `lines=${smallText.split('\n').filter(Boolean).length}`)
 dispose3()
 
+// ================= 0.1.3 形态：三参签名 + 头帧复用原方法 =================
+// 复刻 0.1.3 jsonl 实现：encodeMaterialization(meta, inheritedEventCount, events)；
+// events 为空时只编码 header 帧（补丁头帧复用的入口）；body 单帧、无 packChunks
+function splitFrames(buf) {
+  const MAGIC = [0x28, 0xB5, 0x2F, 0xFD]
+  const frames = []
+  let start = -1
+  for (let i = 0; i + 3 < buf.length; i++) {
+    if (buf[i] === MAGIC[0] && buf[i + 1] === MAGIC[1] && buf[i + 2] === MAGIC[2] && buf[i + 3] === MAGIC[3]) {
+      if (start !== -1) frames.push(buf.subarray(start, i))
+      start = i
+    }
+  }
+  if (start !== -1) frames.push(buf.subarray(start))
+  return frames
+}
+// 类语法复刻（方法 toString 需含 'encodeMaterialization(meta, inheritedEventCount, events)' 特征行，
+// 与真实 0.1.3 jsonl 后端一致）
+function makePersistence013() {
+  const zstdCompressAsync = (async () => { const { zstdCompress } = await import('node:zlib'); const { promisify } = await import('node:util'); return promisify(zstdCompress) })()
+  function eventLines(events) { return events.map((r) => JSON.stringify(r)).join('\n') + '\n' }
+  async function compressZstdFrame(input) {
+    const z = await zstdCompressAsync
+    return z(Buffer.from(input), { params: { [201]: 1 } })
+  }
+  return new (class JsonlMock013 {
+    constructor() { this.compression = 'zstd' }
+    async encodeMaterialization(meta, inheritedEventCount, events) {
+      const header = JSON.stringify({
+        type: 'session', version: meta.version, id: meta.id, createdAt: meta.createdAt,
+        ...(meta.cwd !== void 0 ? { cwd: meta.cwd } : {}),
+        ...(meta.parentSession !== void 0 ? { parentSession: meta.parentSession } : {}),
+        isSeeded: meta.isSeeded ?? false,
+        delegationDepth: meta.delegationDepth ?? 0,
+      }) + '\n'
+      if (events.length === 0) return this.compression === 'none' ? header : compressZstdFrame(header)
+      const body = eventLines(events) + '\n'
+      if (this.compression === 'none') return header + body
+      const headerFrame = await compressZstdFrame(header)
+      const eventFrame = await compressZstdFrame(body)
+      return Buffer.concat([headerFrame, eventFrame])
+    }
+  })()
+}
+
+{
+  const meta013 = { version: 2, id: 'session-m013', createdAt: 123, cwd: 'C:\\t', isSeeded: true, delegationDepth: 0 }
+  const native013 = makePersistence013()
+  const nativeBuf = await native013.encodeMaterialization(meta013, 700, events)
+  const nativeText = decodeAllFrames(nativeBuf).toString('utf8')
+  const nativeLines = nativeText.split('\n').filter(Boolean)
+
+  const p013 = makePersistence013()
+  const ctx013 = {
+    get: (name) => name === 'sessionPersistence' ? p013 : void 0,
+    on: () => () => {},
+    inject: (deps, cb) => { if (deps[0] === 'sessionPersistence') cb({ get: () => p013 }) },
+    effect: (gen) => { const it = gen(); const step = (r) => { const { value, done } = it.next(r); if (!done) step(value) }; step() },
+    sessions: { get: () => void 0, list: () => [] },
+    logger: { warn: () => {} },
+  }
+  const dispose013 = plugin.apply(ctx013)
+  await new Promise((r) => setTimeout(r, 50))
+
+  const patched013 = await p013.encodeMaterialization(meta013, 700, events)
+  const patchedText = decodeAllFrames(patched013).toString('utf8')
+  const patchedLines = patchedText.split('\n').filter(Boolean)
+
+  check('0.1.3 output decodes to same line count', patchedLines.length === nativeLines.length, `native=${nativeLines.length} patched=${patchedLines.length}`)
+  check('0.1.3 output uses multiple frames', countFrames(patched013) > countFrames(nativeBuf), `native frames=${countFrames(nativeBuf)} patched frames=${countFrames(patched013)}`)
+  // 头帧复用原方法：同一输入下字节级一致
+  const patchedFrames = splitFrames(patched013)
+  const nativeFrames = splitFrames(nativeBuf)
+  check('0.1.3 header frame byte-identical (reused encoder)', patchedFrames[0].equals(nativeFrames[0]))
+  // 逐事件 JSON 等价
+  let eq013 = true
+  for (let i = 1; i < nativeLines.length; i++) {
+    if (nativeLines[i] !== patchedLines[i]) { eq013 = false; break }
+  }
+  check('0.1.3 all event lines byte-identical', eq013)
+
+  // 阈值以下走原方法（保持两帧：header + body）
+  const small013 = makePersistence013()
+  const ctx013b = { ...ctx013, get: (name) => name === 'sessionPersistence' ? small013 : void 0 }
+  const dispose013b = plugin.apply(ctx013b)
+  await new Promise((r) => setTimeout(r, 50))
+  const small013Buf = await small013.encodeMaterialization(meta013, 0, smallEvents)
+  check('0.1.3 below-threshold unchanged (two frames)', countFrames(small013Buf) === 2, `frames=${countFrames(small013Buf)}`)
+  dispose013b()
+  dispose013()
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)

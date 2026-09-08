@@ -2,6 +2,7 @@
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { zstdCompressSync } from 'node:zlib'
 
 let failures = 0
 const check = (label, cond, extra = '') => {
@@ -136,6 +137,53 @@ function makeCtx({ registry, cache, sessions, persistence, dshHomePaths, setting
     check('backfill row count matches', rec.rows.counter.val.count === 25000, `count=${rec.rows.counter.val.count}`)
     check('backfill watermark = last seq', rec.rows.counter.seq === 24999)
     check('identity carried from log header', rec.identity.createdAt === 42 && rec.identity.cwd === 'C:\\test')
+  }
+  dispose()
+  rmSync(tmp, { recursive: true, force: true })
+}
+
+// ================= 用例 4：0.1.3 直读文件分支（无 readRaw） =================
+// 模拟 0.1.3 持久化层：persistence 服务无 readRaw（handle 模型），backfill
+// 直读磁盘多帧 zstd 文件（session.vN.jsonl.zstd）；seed cut 由事件流尾
+// session/end-seed {inherited:true} marker 推导（cut == marker.seq）。
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'warmup-bf013-'))
+  const projDir = join(tmp, '--C-test--')
+  const sessDir = join(projDir, 'session-cold2')
+  mkdirSync(sessDir, { recursive: true })
+  const header = { type: 'session', version: 2, id: 'session-cold2', createdAt: 42, cwd: 'C:\\test', isSeeded: true, delegationDepth: 0 }
+  const events = []
+  for (let seq = 0; seq < 3000; seq++) events.push({ type: 'step/start', seq, time: 1, data: { turn: 1, step: 1 } })
+  // end-seed marker：seq = cut（v2 校验 lastInheritedMarker !== cut）
+  events.push({ type: 'session/end-seed', seq: 3000, time: 1, data: { inherited: true } })
+  for (let seq = 3001; seq < 3500; seq++) events.push({ type: 'step/start', seq, time: 1, data: { turn: 2, step: 1 } })
+  const headerLine = JSON.stringify(header) + '\n'
+  const body = events.map((e) => JSON.stringify(e)).join('\n') + '\n'
+  const frame1 = zstdCompressSync(Buffer.from(headerLine), { params: { [201]: 1 } })
+  const frame2 = zstdCompressSync(Buffer.from(body), { params: { [201]: 1 } })
+  writeFileSync(join(sessDir, 'session.v2.jsonl.zstd'), Buffer.concat([frame1, frame2]))
+
+  const registry = makeRegistry()
+  registry.register(defCounter)
+  const cache = makeCache()
+  // 0.1.3 服务形状：encodeMaterialization 存在、readRaw 不存在
+  const persistence = { encodeMaterialization: async () => Buffer.from('') }
+  const sessions = new Map()
+  const settings = {
+    register: () => () => {},
+    get: () => ({ backfillOnBoot: true, backfillMinBytes: 1, backfillMaxBytes: 33554432 }),
+  }
+  const ctx2 = makeCtx({ registry, cache, sessions, persistence, dshHomePaths: { sessions: () => tmp }, settings })
+  const dispose = plugin.apply(ctx2)
+  await new Promise((r) => setTimeout(r, 16500))
+  const rec = cache.records.get('session-cold2')
+  check('0.1.3 raw-file backfill row present', rec !== void 0)
+  if (rec) {
+    check('0.1.3 row folds seed+marker+live (3500)', rec.rows.counter.val.count === 3500, `count=${rec.rows.counter.val.count}`)
+    check('0.1.3 watermark = last live seq (3499)', rec.rows.counter.seq === 3499, `seq=${rec.rows.counter.seq}`)
+    check('0.1.3 cut derived from end-seed marker (=3000)', rec.identity.inheritedEventCount === 3000, `cut=${rec.identity.inheritedEventCount}`)
+    check('0.1.3 identity isSeeded carried', rec.identity.isSeeded === true)
+    check('0.1.3 identity from header (createdAt/cwd)', rec.identity.createdAt === 42 && rec.identity.cwd === 'C:\\test')
   }
   dispose()
   rmSync(tmp, { recursive: true, force: true })

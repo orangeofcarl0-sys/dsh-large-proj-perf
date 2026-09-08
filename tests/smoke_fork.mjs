@@ -63,7 +63,7 @@ const seedEvents = []
     const time = Date.now() + seq
     if (kind === 0) seedEvents.push({ type: 'turn/start', seq, time, data: { turn: ++turn } })
     else if (kind === 1) seedEvents.push({ type: 'user/message', seq, time, data: { content: [{ type: 'text', text: text(500) }], source: { kind: 'user' }, role: 'user', id: `m${seq}` }, surfaceOp: 'append' })
-    else if (kind === 2) seedEvents.push({ type: 'assistant/message', seq, time, data: { turn, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: text(800) }], source: { kind: 'model', provider: 't', model: 't' }, id: `a${seq}` } }, surfaceOp: 'append' })
+    else if (kind === 2) seedEvents.push({ type: 'assistant/message', seq, time, data: { turn, step: 1, stream: [], message: { role: 'assistant', content: [{ type: 'text', text: text(800) }], source: { kind: 'model', provider: 't', model: 't' }, id: `a${seq}` } }, surfaceOp: 'append' })
     else if (kind === 3) seedEvents.push({ type: 'tool/call', seq, time, data: { turn, step: 1, name: 'bash', callId: `c${seq}`, arguments: { command: 'ls' } } })
     else if (kind === 4) seedEvents.push({ type: 'tool/result', seq, time, data: { turn, step: 1, message: { source: { kind: 'tool', callId: `c${seq - 1}` }, content: [{ type: 'tool-result', toolCallId: `c${seq - 1}`, content: [{ type: 'text', text: text(1500) }], isError: false }], role: 'user', id: `r${seq}` } }, sourceEventSeqs: [seq - 1], surfaceOp: 'append' })
     else if (kind === 5) seedEvents.push({ type: 'step/start', seq, time, data: { turn, step: 1 } })
@@ -91,7 +91,8 @@ const check = (label, cond, extra = '') => {
   // 但 _forkSeed 截到 lastEvent，构造器再补一个新 end-seed → 数量相同
   const srcEvents = src.snapshotEvents()
   const childEvents = child.snapshotEvents()
-  check('native fork works', childEvents.length === srcEvents.length)
+  // 0.1.3 语义：fork 的 child 额外带一个 inherited end-seed marker（cut==seed 尾部）
+  check('native fork works', childEvents.length === srcEvents.length + 1)
   check('native fork header', child.header.parentSession === 'session-src1' && child.header.isSeeded === true)
   check('native fork header has no seedLength (alpha.5)', !('seedLength' in child.header))
   // alpha.5 原生 fork 的 meta 只带 cwd/parentSession/isSeeded——不继承 origin
@@ -114,7 +115,9 @@ const check = (label, cond, extra = '') => {
   const patchedMs = performance.now() - t0
 
   const zeroChildEvents = child.snapshotEvents()
-  check('zero-copy fork works', zeroChildEvents.length === src.snapshotEvents().length)
+  // 插件注入 inherited marker 后与原生同尺寸（= src + marker）
+  check('zero-copy fork works', zeroChildEvents.length === src.snapshotEvents().length + 1,
+    `child=${zeroChildEvents.length} src=${src.snapshotEvents().length}`)
   check('zero-copy fork header parent', child.header.parentSession === 'session-src2')
   check('zero-copy fork header isSeeded', child.header.isSeeded === true)
   check('zero-copy fork header has no seedLength (alpha.5)', !('seedLength' in child.header))
@@ -150,7 +153,7 @@ const check = (label, cond, extra = '') => {
   const t2 = performance.now()
   const child2 = store.fork('session-src2')
   const nativeMs2 = performance.now() - t2
-  check('dispose restores native fork', child2.snapshotEvents().length === src.snapshotEvents().length)
+  check('dispose restores native fork', child2.snapshotEvents().length === src.snapshotEvents().length + 1)
   console.log(`  post-dispose fork: ${nativeMs2.toFixed(1)}ms`)
 }
 
@@ -170,13 +173,14 @@ function makeStoreForkBaseline() {
   const src = store.create('session-src3', { seed: seedEvents, meta: { cwd: 'F:\\bench' } })
   const plugin = await import('../lib/index.js')
   const dispose = plugin.apply({ ...ctx, sessions: store })
-  // 模拟版本漂移：restore 通道消失（prepare 不再支持 seedSource:'persistence'）
-  // —— 补丁额外依赖、官方路径不依赖的能力，探测失败必须回退官方实现。
+  // 模拟版本漂移：restore 通道失效（0.1.3 起 prepare 按 eventState 分派，模拟
+  // 上游改回拒绝 shared-frozen）—— 补丁额外依赖、官方路径不依赖的能力，
+  // 运行期 try/catch 兜底必须回退官方实现。
   const proto = Object.getPrototypeOf(store)
   const savedPrepare = proto.prepare
   proto.prepare = function (id, options) {
-    if (options?.seedSource === 'persistence') {
-      const e = new Error('seedSource persistence unsupported')
+    if (options?.eventState === 'shared-frozen') {
+      const e = new Error('eventState unsupported')
       throw e
     }
     return savedPrepare.call(this, id, options)
@@ -184,7 +188,7 @@ function makeStoreForkBaseline() {
   let child
   try { child = store.fork('session-src3') } catch (e) { child = void 0; console.error('  fallback threw:', e.message) }
   // 探测无法预知 prepare 会拒绝 restore；该场景由 try/catch 兜底转官方：
-  check('fallback to native on restore-channel drift', child !== void 0 && child.snapshotEvents().length === src.snapshotEvents().length)
+  check('fallback to native on restore-channel drift', child !== void 0 && child.snapshotEvents().length === src.snapshotEvents().length + 1)
   proto.prepare = savedPrepare
   dispose()
 }

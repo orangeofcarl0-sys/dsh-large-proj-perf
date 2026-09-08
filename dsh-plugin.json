@@ -24,24 +24,24 @@
   },
   "compat": {
     "hosts": [
-      "@deepseek-ai/dsh 0.1.0-rc.6 - 0.1.2-rc.1"
+      "@deepseek-ai/dsh 0.1.0-rc.6 - 0.1.3-alpha.2"
     ]
   },
   "overrides": [
     {
       "target": "SessionStore.prototype.fork",
       "kind": "patch",
-      "description": "zero-copy fork via Session.prepare(seedSource:'persistence') fromRestore channel; skips the per-event snapshotJsonValue deep copy (346ms -> 19ms)"
+      "description": "zero-copy fork via the fromRestore channel (0.1.3: create(eventState:'shared-frozen') after _resolveForkSource/_forkSeed validation; alpha.5/rc.1: prepare(seedSource:'persistence')); skips the per-event snapshotJsonValue deep copy (346ms -> 19ms)"
     },
     {
       "target": "PersistenceCoordinator.initFor",
       "kind": "patch",
-      "description": "eliminates the structuredClone(seed) deep copy; retired on dsh >= 0.1.0-rc.8 where upstream natively reuses session.events"
+      "description": "eliminates the structuredClone(seed) deep copy; retired on dsh >= 0.1.0-rc.8 where upstream natively reuses session.events (0.1.3: coordinator API removed entirely)"
     },
     {
       "target": "JsonlSessionPersistence.encodeMaterialization",
       "kind": "patch",
-      "description": "chunked zstd-frame materialization for fork children; removes the 500MB single-string / RangeError path"
+      "description": "chunked zstd-frame materialization for fork children (0.1.3 signature (meta, inheritedEventCount, events), header frame reuses the upstream format-catalog encoder); removes the 500MB single-string / RangeError path"
     },
     {
       "target": "SessionPreparations.capacity",

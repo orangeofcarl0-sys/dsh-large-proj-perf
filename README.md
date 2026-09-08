@@ -12,13 +12,13 @@ DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、投影分片�
 
 ## 特性一览
 
-| 能力 | 解决什么 | 实测 | 状态（rc.1） |
+| 能力 | 解决什么 | 实测 | 状态（0.1.3-alpha.2） |
 |---|---|---|---|
-| 零拷贝 fork | fork 时逐事件深拷贝阻塞 | 346ms → 19ms | 活跃 |
+| 零拷贝 fork | fork 时逐事件深拷贝阻塞 | 346ms → 19ms | 活跃（0.1.3 走 `create(eventState:'shared-frozen')` 通道） |
 | 分片投影预热 | 打开历史会话的同步冷折叠冻结事件循环 | 74 万事件 20min → ~200ms | 活跃 |
-| fork 缓存回填 | fork 子会话无投影缓存行，重开走全量读 | 分钟级 → 秒级 | 活跃 |
-| 分片 materialize | fork 落盘单巨字符串：60 万事件 501MB、74 万直接 RangeError | 多帧 zstd，字节兼容 | 活跃 |
-| 冷会话 LRU 裁剪 | 冷会话事件树 ~700MB/个 ×5 叠加 OOM | 省 ~2.8GB | 活跃 |
+| fork 缓存回填 | fork 子会话无投影缓存行，重开走全量读 | 分钟级 → 秒级 | 活跃（0.1.3 直读 `session.vN.jsonl.zstd` 多帧） |
+| 分片 materialize | fork 落盘单巨字符串：60 万事件 501MB、74 万直接 RangeError | 多帧 zstd，字节兼容 | 活跃（0.1.3 三参签名已适配） |
+| 冷会话 LRU 裁剪 | 冷会话事件树 ~700MB/个 ×5 叠加 OOM | 省 ~2.8GB | 0.1.3 上游系统修复（coldLogMemo=2），补丁自动跳空 |
 | fast initFor | persistence 的 `structuredClone(seed)` | 135ms → ~0ms | 已退役（rc.8 上游原生实现） |
 | heap 检测 | V8 heap 上限过低告警 | 运维辅助 | 活跃 |
 | dsh-std 兼容 | Community v0.15 清单 + facet 入口 | 面向未来宿主 | 就绪 |
@@ -39,8 +39,10 @@ dsh 0.1.x 在大会话上有三类同步阻塞（源码级定位 + 实测）：
 对应方案（全部独立开关、失败自动回退官方实现）：
 
 1. **零拷贝 fork**：fork 的 seed 是 `deepFreeze` 不可变 JSON 树，改走
-   `Session.prepare(seedSource:'persistence')` 的 fromRestore 通道原地冻结复用引用；
-   子会话 header 与官方逐字段一致。
+   fromRestore 通道原地冻结复用引用（0.1.3：`create({eventState:'shared-frozen'})`，
+   复用原生 `_resolveForkSource`/`_forkSeed` 全部校验并补 injected end-seed marker；
+   alpha.5/rc.1：`Session.prepare(seedSource:'persistence')`）；子会话 header
+   与官方逐字段一致。
 2. **分片投影预热**：会话进入且事件数超阈值时，抢在首次冷折叠前分片重放 cells
    （每片间 `setImmediate` 让出），直写 `registration.cells`；有投影缓存行时取基线
    跳过已折叠前缀。fork 子会话预热后回填缓存行。
@@ -62,7 +64,7 @@ try-catch / 配置开关）；dispose 完整还原。
 ## 与上游 dsh 的关系
 
 本插件通过 monkey-patch 内部方法实现，**与 dsh 版本高度耦合**。已在
-`0.1.0-rc.6` / `rc.7` / `rc.8` / `0.1.1-rc.1` / `rc.2` / `0.1.2-alpha.5` / `0.1.2-rc.1` 上开发并验证。
+`0.1.0-rc.6` / `rc.7` / `rc.8` / `0.1.1-rc.1` / `rc.2` / `0.1.2-alpha.5` / `0.1.2-rc.1` / `0.1.3-alpha.2` 上开发并验证。
 升级 dsh 后：
 
 - 启动日志会显示 `dsh version: x.y.z (verified)`（探针）或列表外版本告警；
@@ -70,15 +72,15 @@ try-catch / 配置开关）；dispose 完整还原。
 - 确认无 `signature mismatch` 告警——补丁不匹配时自动跳过（不崩溃），但优化
   会静默失效。
 
-上游已吸收 / 仍独有（rc.1 源码核实，详见 `stats.patches`）：
+上游已吸收 / 仍独有（0.1.3-alpha.2 源码核实，详见 `stats.patches`）：
 
-| 插件能力 | 上游 0.1.2-rc.1 状态 | 插件状态 |
+| 插件能力 | 上游 0.1.3-alpha.2 状态 | 插件状态 |
 |---|---|---|
-| fastInitFor | **rc.8 起原生实现**（rc.1 仍为 `snapshotEvents()`） | 已退役 |
-| zeroCopyFork | 构造器 `snapshotJsonValue(source)` 仍在；fork meta 变为 `isSeeded`+`inheritedEventCount`（已适配） | 活跃 |
+| fastInitFor | persistence API 重写（`PersistenceCoordinator`/`SessionPreparations` 全移除），无 initFor 残留 | 已退役（rc.8 起上游原生） |
+| zeroCopyFork | 构造器 `snapshotJsonValue(source)` 深拷贝仍在；0.1.3 起暴露 `create(eventState:'shared-frozen')` 零拷贝通道但 fork 不走它（已适配并注入 end-seed marker） | 活跃 |
 | 投影分片预热 | `cellFor` 仍同步全量 `buildCell` | 活跃 |
-| 分片 materialize | 仍一次性全量序列化（签名变为 `(storage, events)`，已适配） | 活跃 |
-| 冷会话 LRU 裁剪 | 容量可配置但默认偏大 | 活跃 |
+| 分片 materialize | 仍一次性全量序列化（0.1.3 签名变 `(meta, inheritedEventCount, events)`，实现移至 `dsh-session-persistence-jsonl`，已适配） | 活跃 |
+| 冷会话 LRU 裁剪 | **0.1.3 系统修复**：`COLD_LOG_MEMO_MAX_ENTRIES=2` + handle 模型懒 materialize | 上游代偿（老版本仍活跃） |
 
 alpha.5 破坏性变更与适配：`Session.events` getter → `snapshotEvents()`；
 fork meta `seedLength` → `isSeeded: true` + options `inheritedEventCount`；
@@ -89,12 +91,23 @@ fork meta `seedLength` → `isSeeded: true` + options `inheritedEventCount`；
 0.1.2-rc.1 与 alpha.5 对比：dsh、dsh-session、dsh-session-persistence 三个包的补丁点
 源码零差异（仅依赖版本升号与排序），无新增破坏性变更，本插件无需适配。
 
+0.1.3-alpha.2 破坏性变更与适配：**persistence 子系统重写**——`dsh-session-persistence`
+变为 contract 层（`SessionPersistence` 基类 + 错误 + 校验，`PersistenceCoordinator`/
+`initFor`/`SessionPreparations` 移除），JSONL 实现与非迁移逻辑移入
+`dsh-session-persistence-jsonl`；引入格式 v0→v1→v2 迁移链（`dsh-session-format` 系列），
+物理 header 移除 `seedLength`（seed cut 改由事件流尾 `session/end-seed
+{inherited:true}` marker 表达，cut == marker.seq）；文件名变 `session.vN.jsonl[.zstd]`；
+`encodeMaterialization` 签名变 `(meta, inheritedEventCount, events)`。插件已适配：
+零拷贝 fork 改用 `create(eventState:'shared-frozen')`（meta 必须带 version/id/createdAt，
+seed 尾注入 marker）；分片 materialize 头帧复用上游编码器；冷会话补行改为直读磁盘
+多帧 zstd 文件；`prepared-cache-trim` 在上游 0.1.3 自动跳空（上游 memo 上限 2）。
+
 上游 rc.7 修复了历史分页栈溢出（可用性）、rc.8 优化了 SQLite 后端——均不与本插件
 重叠，也未触碰根因（历史加载全量解码、live 事件树全量驻留）。
 
 ## 安装
 
-要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.1.2-rc.1`
+要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.1.3-alpha.2`
 （`package.json` 已声明 `engines`）。
 
 ```sh

@@ -20,7 +20,7 @@ for (let seq = 0; seq < N; seq++) {
   } else if (kind === 1) {
     events.push({ type: 'user/message', seq, time, data: { content: [{ type: 'text', text: text(AVG) }], source: { kind: 'user' }, role: 'user', id: `m${seq}` }, surfaceOp: 'append' })
   } else if (kind === 2 || kind === 5) {
-    events.push({ type: 'assistant/message', seq, time, data: { turn, step: 1, message: { role: 'assistant', content: [{ type: 'reasoning', text: text(AVG * 2) }, { type: 'text', text: text(AVG) }], source: { kind: 'model', provider: 'bench', model: 'bench-model' }, id: `a${seq}` } }, surfaceOp: 'append' })
+    events.push({ type: 'assistant/message', seq, time, data: { turn, step: 1, stream: [], message: { role: 'assistant', content: [{ type: 'reasoning', text: text(AVG * 2) }, { type: 'text', text: text(AVG) }], source: { kind: 'model', provider: 'bench', model: 'bench-model' }, id: `a${seq}` } }, surfaceOp: 'append' })
   } else if (kind === 3) {
     events.push({ type: 'tool/call', seq, time, data: { turn, step: 1, name: 'bash', callId: `c${seq}`, arguments: { command: text(120) } } })
   } else if (kind === 4) {
