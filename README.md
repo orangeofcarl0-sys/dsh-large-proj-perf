@@ -1,7 +1,7 @@
 # dsh-large-proj-perf
 
 [![Version](https://img.shields.io/badge/version-1.2.0-blue)]()
-[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.1.3--alpha.2-green)]()
+[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.1.5--alpha.1-green)]()
 [![dsh-std](https://img.shields.io/badge/dsh--std-Community_v0.15-blue)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -77,6 +77,7 @@ dsh 0.1.x 在大会话上有三类同步阻塞（源码级定位 + 实测）：
 | 0.1.1-rc.1 / rc.2 | 同 alpha.5 形态；rc.2 为 `(meta, events)` 裸 meta 签名 |
 | 0.1.2-alpha.5 / 0.1.2-rc.1 | `snapshotEvents()`；fork meta `isSeeded`+`inheritedEventCount`；`(storage, events)` 签名 |
 | 0.1.3-alpha.2 | persistence 子系统重写（见下） |
+| 0.1.5-alpha.1 | 会话格式 **v3**（`SESSION_FORMAT_VERSION=3`）；cut/header 语义与 v2 一致，文件名 `session.v3.jsonl`；补丁点零行级变更 |
 
 ### 0.1.3-alpha.2 关键变化（已全部适配）
 
@@ -95,7 +96,7 @@ dsh 0.1.x 在大会话上有三类同步阻塞（源码级定位 + 实测）：
 
 ## 安装
 
-要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.1.3-alpha.2`
+要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.1.5-alpha.1`
 （`package.json` 已声明 `engines`）。
 
 ```sh
