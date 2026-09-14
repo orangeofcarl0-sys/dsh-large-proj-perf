@@ -2,7 +2,6 @@
 
 [![Version](https://img.shields.io/badge/version-1.2.0-blue)]()
 [![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.1.5--rc.2-green)]()
-[![dsh-std](https://img.shields.io/badge/dsh--std-Community_v0.15-blue)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、分片投影预热、fork 缓存回填、
@@ -24,7 +23,6 @@ DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、分片投影�
 | 冷会话 LRU 裁剪 | 冷会话事件树 ~700MB/个 ×5 叠加 OOM | 省 ~2.8GB | 0.1.3 上游系统修复（`coldLogMemo=2`），补丁自动跳空 |
 | fast initFor | persistence 的 `structuredClone(seed)` 深拷贝 | 135ms → ~0ms | 已退役（rc.8 起上游原生；0.1.3 coordinator 移除） |
 | heap 检测 | V8 heap 上限过低告警 | 运维辅助 | 活跃 |
-| dsh-std 兼容 | Community v0.15 清单 + facet 宿主入口 | 面向未来宿主 | 就绪 |
 
 运行时各补丁的实际状态经 `stats.get` 的 `patches` 字段暴露：
 `active`（已安装生效）/ `retired`（上游已原生实现）/ `inactive`（环境缺失或特征
@@ -109,8 +107,8 @@ dsh plugin --profile web add github:orangeofcarl0-sys/dsh-large-proj-perf
 dsh plugin --profile web add file:<本仓库路径>
 ```
 
-> 修改仓库代码后需把 `lib/`、`dsh-plugin.json`、`cordis.patch.yml`、`package.json`
-> 同步到 `<DSH_HOME>/profiles/web/node_modules/dsh-large-proj-perf/`（`file:` 安装
+> 修改仓库代码后需把 `lib/`、`cordis.patch.yml`、`package.json` 同步到
+> `<DSH_HOME>/profiles/web/node_modules/dsh-large-proj-perf/`（`file:` 安装
 > 不自动跟随），或重新 `dsh plugin add`。重启 `dsh web` 生效，日志出现
 > `[dsh-perf] installed (...)` 即成功。
 
@@ -173,21 +171,13 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
   -H 'Content-Type: application/json' -d '{"key":"backfillOnBoot","value":true}'
 ```
 
-## dsh-std / 未来宿主
-
-- `cordis.patch.yml`：当前 dsh（cordis 插件协议）的加载方式，`patch` 段声明
-  `dsh-large-proj-perf` bundle；
-- `dsh-plugin.json`：dsh-std **Community v0.15** 清单（`$schema` URN、
-  `facets.host.entry: lib/std-host.js`、`compat.hosts` 版本范围、`overrides`
-  5 个补丁点声明）——为未来 dsh-std 宿主预留的双轨入口。
-
 ## 开发与测试
 
 ```sh
 # 一次到位：junction 链接全局 dsh 的嵌套依赖（仓库无 node_modules）
 powershell -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 
-# 全套 8 套件 134 断言（含 verify_compat 对真实安装源码的特征断言）
+# 全套 7 套件 112 断言（含 verify_compat 对真实安装源码的特征断言）
 npm test
 ```
 
@@ -202,7 +192,6 @@ lib/api.js              stats/config HTTP 端点
 lib/warmup.js           分片投影预热 + fork 缓存回填
 lib/backfill.js         磁盘冷会话补行（readRaw / 0.1.3 直读双通道）
 lib/patches/*.js        零拷贝 fork / fast initFor / 冷会话 LRU / 分片 materialize
-lib/std-host.js         dsh-std 宿主入口（facets.host.entry）
 ```
 
 补丁安装原则：**特征校验先行**（`String(原型方法)` 含特征字面量，不匹配打
