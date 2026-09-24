@@ -1,7 +1,7 @@
 # dsh-large-proj-perf
 
 [![Version](https://img.shields.io/badge/version-1.2.0-blue)]()
-[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.1.7--rc.1-green)]()
+[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.1.7--rc.2-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、分片投影预热、fork 缓存回填、
@@ -98,6 +98,7 @@ title 前驱提示，**不能作折叠短路**——补行与基线复用会静�
 | 0.1.5-alpha.1 | 会话格式 **v3**（`SESSION_FORMAT_VERSION=3`）；cut/header 语义与 v2 一致，文件名 `session.v3.jsonl`；补丁点零行级变更 |
 | 0.1.5-rc.1 | 仅新增已知事件类型（`deliverables/presented`、`subagent/catalog`）；补丁点零变化 |
 | 0.1.5-rc.2 | 相对 rc.1 四个关键包源码零差异（仅版本号），无新增变更 |
+| 0.1.7-rc.2 | 新增 `toolHistory()` 增量折叠（游标只消费新事件）；persistence/format/projection-cache 零差异，补丁点无变化 |
 | 0.1.7-rc.1 | fork 内部重构：`_forkSeed` → `_forkBoundary` + 模块级 `buildForkSeed`；**open-turn 边界从「拒绝」改为「注入 turn 闭合事件」**；会话格式升 **v4**（cut/文件名语义同 v2/v3）；事件词汇收紧（`tool/result` role=`tool`、新增 `system/message`）。插件已适配（三协议探测） |
 
 ### 0.1.3-alpha.2 关键变化（已全部适配）
@@ -117,7 +118,7 @@ title 前驱提示，**不能作折叠短路**——补行与基线复用会静�
 
 ## 安装
 
-要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.1.7-rc.1`
+要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.1.7-rc.2`
 （`package.json` 已声明 `engines`）。
 
 ```sh
