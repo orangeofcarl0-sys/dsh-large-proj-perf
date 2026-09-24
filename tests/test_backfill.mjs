@@ -183,6 +183,8 @@ function makeCtx({ registry, cache, sessions, persistence, dshHomePaths, setting
     check('0.1.3 watermark = last live seq (3499)', rec.rows.counter.seq === 3499, `seq=${rec.rows.counter.seq}`)
     check('0.1.3 cut derived from end-seed marker (=3000)', rec.identity.inheritedEventCount === 3000, `cut=${rec.identity.inheritedEventCount}`)
     check('0.1.3 identity isSeeded carried', rec.identity.isSeeded === true)
+    // formatVersion 必带（上游 0.1.3+ 用它判折叠短路资格）
+    check('identity carries formatVersion (=2 from header)', rec.identity.formatVersion === 2, `formatVersion=${rec.identity.formatVersion}`)
     check('0.1.3 identity from header (createdAt/cwd)', rec.identity.createdAt === 42 && rec.identity.cwd === 'C:\\test')
   }
   dispose()

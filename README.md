@@ -70,6 +70,23 @@ dsh 0.1.x 在大会话上有三类同步阻塞（源码级定位 + 实测）：
 安全性：共享冻结引用与深拷贝语义等价（事件进入源会话时已完整校验并深冻结）；
 三层回退保证任何不匹配都不破坏上游行为。
 
+### 加载侧：上游已优化的部分与插件的作用点
+
+长对话「打开」的成本分三段，0.1.3–0.1.7 期间上游已优化前两段：
+
+| 阶段 | 上游现状（0.1.7） | 插件是否介入 |
+|---|---|---|
+| 磁盘解码 | 逐帧 zstd 解码 + 增量 `SessionLogScanner`（不拼整串），每 500ms `scheduler.yield()` 让出事件循环 | 否（上游已良好） |
+| 老格式迁移 | 格式 < v4 的会话经 v0→v1→v2→v3→v4 链，**在 Worker Thread 内完成**并发布新世代文件（`session.vN.jsonl`） | 否（上游已良好） |
+| 投影折叠 | `cellFor` 冷时**同步全量** `buildCell`（仍在主线程） | **是**：分片预热 + 缓存行基线（见下） |
+| 落盘编码 | `encodeMaterialization` 单 body 帧（fork 子会话首次落盘可能 501MB 单串） | **是**：分片 zstd 多帧 |
+
+插件写/读投影缓存行时必须使用与上游 `identityOf` 一致的键：`createdAt`/`cwd`/
+`isSeeded`/`inheritedEventCount` 以及 **0.1.3 起新增的 `formatVersion`**
+（= `header.version`）。上传 identity 缺 `formatVersion` 时，上游只把它当作
+title 前驱提示，**不能作折叠短路**——补行与基线复用会静默失效（此坑已于 1.2.0
+修复并有回归断言守护）。
+
 ## 支持版本
 
 | 版本线 | 形态 |
@@ -77,7 +94,7 @@ dsh 0.1.x 在大会话上有三类同步阻塞（源码级定位 + 实测）：
 | 0.1.0-rc.6 / rc.7 / rc.8 | fork `prepare(seedSource)` 通道；initFor `structuredClone` 形态 |
 | 0.1.1-rc.1 / rc.2 | 同 alpha.5 形态；rc.2 为 `(meta, events)` 裸 meta 签名 |
 | 0.1.2-alpha.5 / 0.1.2-rc.1 | `snapshotEvents()`；fork meta `isSeeded`+`inheritedEventCount`；`(storage, events)` 签名 |
-| 0.1.3-alpha.2 | persistence 子系统重写（见下） |
+| 0.1.3-alpha.2 | persistence 子系统重写（见下）；投影缓存 identity 新增 `formatVersion`（插件已跟进） |
 | 0.1.5-alpha.1 | 会话格式 **v3**（`SESSION_FORMAT_VERSION=3`）；cut/header 语义与 v2 一致，文件名 `session.v3.jsonl`；补丁点零行级变更 |
 | 0.1.5-rc.1 | 仅新增已知事件类型（`deliverables/presented`、`subagent/catalog`）；补丁点零变化 |
 | 0.1.5-rc.2 | 相对 rc.1 四个关键包源码零差异（仅版本号），无新增变更 |

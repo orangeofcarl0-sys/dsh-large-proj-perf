@@ -110,6 +110,10 @@ check('cache API (recordFor/write/put) present',
   ['recordFor(id, expected)', 'async write(session)', 'async put(id, identity, rows)'].every((m) => cacheSrc.includes(m)))
 check('cache identity carries isSeeded/inheritedEventCount (alpha.5)',
   cacheSrc.includes('identityOf(header, inheritedEventCount)') && cacheSrc.includes('isSeeded: header.isSeeded'))
+// 0.1.3 起 identity 额外要求 formatVersion —— 插件写入的行必须带该字段，
+// 否则只能当 title 前驱提示（补行/基线的折叠短路资格静默失效）
+check('cache identity requires formatVersion (fold-shortcut gate)',
+  cacheSrc.includes('stored.formatVersion === expected.formatVersion'))
 check('SessionLogOffset imported into cache package', cacheSrc.includes('SessionLogOffset'))
 
 // ---- 动态导出检查 ----

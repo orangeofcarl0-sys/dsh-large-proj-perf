@@ -162,12 +162,16 @@ function makeCtx({ registry, sessions }) {
   // mock 投影缓存：基线到 seq 14999（15000 事件已折叠）
   const cacheRow = { ver: 1, seq: 14999, val: { count: 15000, lastSeq: 14999 } }
   const ctx2 = makeCtx({ registry, sessions })
+  let seenIdentity = null
   ctx2.get = (name) => name === 'sessionProjectionCache'
-    ? { recordFor: () => ({ rows: { counter: cacheRow } }) }
+    ? { recordFor: (id, identity) => { seenIdentity = identity; return { rows: { counter: cacheRow } } } }
     : name === 'sessionProjections' ? registry : void 0
   const dispose = plugin.apply(ctx2)
   await new Promise((r) => setTimeout(r, 500))
   const cell = registry.registrations.get('counter')?.cells.get(session)
+  // 0.1.3 起 identity 必须带 formatVersion（= header.version），否则上游只把
+  // 该记录当前驱提示，不能作折叠短路——基线复用会静默失效
+  check('baseline identity carries formatVersion', seenIdentity?.formatVersion === 0, `formatVersion=${seenIdentity?.formatVersion}`)
   check('baseline warmup completes', cell !== void 0)
   if (cell) check('baseline result identical', JSON.stringify(cell.state) === JSON.stringify({ count: N, lastSeq: N - 1 }),
     `state=${JSON.stringify(cell.state)}`)
