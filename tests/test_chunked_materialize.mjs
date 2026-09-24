@@ -50,7 +50,9 @@ function makePersistence({ packChunks = false } = {}) {
   }
 }
 
-const N = 200000 // 超过 materializeChunkEvents 阈值（50000）触发分片
+// 超过 materializeChunkEvents 阈值（50000）即触发分片；6 万足以覆盖多帧路径，
+// 同时把单帧解压峰值降到套件连跑也不会 OOM 的量级
+const N = 60000
 const events = buildEvents(N)
 const meta = { version: 0, id: 'session-m1', createdAt: 123, cwd: 'C:\\t', delegationDepth: 0 }
 

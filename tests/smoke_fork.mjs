@@ -65,7 +65,7 @@ const seedEvents = []
     else if (kind === 1) seedEvents.push({ type: 'user/message', seq, time, data: { content: [{ type: 'text', text: text(500) }], source: { kind: 'user' }, role: 'user', id: `m${seq}` }, surfaceOp: 'append' })
     else if (kind === 2) seedEvents.push({ type: 'assistant/message', seq, time, data: { turn, step: 1, stream: [], message: { role: 'assistant', content: [{ type: 'text', text: text(800) }], source: { kind: 'model', provider: 't', model: 't' }, id: `a${seq}` } }, surfaceOp: 'append' })
     else if (kind === 3) seedEvents.push({ type: 'tool/call', seq, time, data: { turn, step: 1, name: 'bash', callId: `c${seq}`, arguments: { command: 'ls' } } })
-    else if (kind === 4) seedEvents.push({ type: 'tool/result', seq, time, data: { turn, step: 1, message: { source: { kind: 'tool', callId: `c${seq - 1}` }, content: [{ type: 'tool-result', toolCallId: `c${seq - 1}`, content: [{ type: 'text', text: text(1500) }], isError: false }], role: 'user', id: `r${seq}` } }, sourceEventSeqs: [seq - 1], surfaceOp: 'append' })
+    else if (kind === 4) seedEvents.push({ type: 'tool/result', seq, time, data: { turn, step: 1, message: { id: `r${seq}`, role: 'tool', toolCallId: `c${seq - 1}`, source: { kind: 'tool', callId: `c${seq - 1}` }, content: [{ type: 'tool-result', toolCallId: `c${seq - 1}`, content: [{ type: 'text', text: text(1500) }], isError: false }] } }, sourceEventSeqs: [seq - 1], surfaceOp: 'append' })
     else if (kind === 5) seedEvents.push({ type: 'step/start', seq, time, data: { turn, step: 1 } })
     else if (kind === 6) seedEvents.push({ type: 'step/end', seq, time, data: { turn, step: 1 } })
     else seedEvents.push({ type: 'turn/end', seq, time, data: { turn, reason: { kind: 'completed' } } })
@@ -143,10 +143,13 @@ const check = (label, cond, extra = '') => {
   const midChild = store.fork('session-src2', 999)
   check('boundary fork at seq 999', midChild.snapshotEvents().length === 1000 + 1 && midChild.header.isSeeded === true && midChild.inheritedEventCount === 1000)
 
-  // open turn 保护：找 turn/start 未闭合点
-  let openTurnErr = false
-  try { store.fork('session-src2', 8) } catch (e) { openTurnErr = /open turn/i.test(e.message) }
-  check('open-turn boundary rejected like native', openTurnErr)
+  // open turn 边界：0.1.7 起上游不再拒绝，改为注入 turn 闭合事件
+  // （buildForkSeed → openTurnClosers）；插件复用同一 helper。
+  // 等价性判据：继承前缀（含 inherited marker）逐字节一致 + cut 一致；
+  // 长度允许差 1——fromRestore 模式会补一条非 inherited 的 live end-seed 标记
+  //（原生快照通道不补），该标记不参与 cut。
+  const patchedOpen = store.fork('session-src2', 8)
+  const patchedOpenEvents = patchedOpen.snapshotEvents()
 
   // dispose 恢复官方实现
   dispose()
@@ -154,6 +157,17 @@ const check = (label, cond, extra = '') => {
   const child2 = store.fork('session-src2')
   const nativeMs2 = performance.now() - t2
   check('dispose restores native fork', child2.snapshotEvents().length === src.snapshotEvents().length + 1)
+  const nativeOpen = store.fork('session-src2', 8)
+  const nativeOpenEvents = nativeOpen.snapshotEvents()
+  const openCut = patchedOpen.inheritedEventCount
+  check('open-turn boundary: cut matches native',
+    openCut === nativeOpen.inheritedEventCount && nativeOpen.header.isSeeded === true,
+    `patched cut=${openCut} native cut=${nativeOpen.inheritedEventCount}`)
+  check('open-turn boundary: inherited prefix + marker byte-identical',
+    JSON.stringify(patchedOpenEvents.slice(0, openCut + 1)) === JSON.stringify(nativeOpenEvents.slice(0, openCut + 1)))
+  check('open-turn boundary: length within one live marker of native',
+    patchedOpenEvents.length >= nativeOpenEvents.length && patchedOpenEvents.length - nativeOpenEvents.length <= 1,
+    `patched=${patchedOpenEvents.length} native=${nativeOpenEvents.length}`)
   console.log(`  post-dispose fork: ${nativeMs2.toFixed(1)}ms`)
 }
 

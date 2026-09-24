@@ -24,7 +24,7 @@ for (let seq = 0; seq < N; seq++) {
   } else if (kind === 3) {
     events.push({ type: 'tool/call', seq, time, data: { turn, step: 1, name: 'bash', callId: `c${seq}`, arguments: { command: text(120) } } })
   } else if (kind === 4) {
-    events.push({ type: 'tool/result', seq, time, data: { turn, step: 1, message: { source: { kind: 'tool', callId: `c${seq - 1}` }, content: [{ type: 'tool-result', toolCallId: `c${seq - 1}`, content: [{ type: 'text', text: text(AVG * 4) }], isError: false }], role: 'user', id: `r${seq}` } }, sourceEventSeqs: [seq - 1], surfaceOp: 'append' })
+    events.push({ type: 'tool/result', seq, time, data: { turn, step: 1, message: { id: `r${seq}`, role: 'tool', toolCallId: `c${seq - 1}`, source: { kind: 'tool', callId: `c${seq - 1}` }, content: [{ type: 'tool-result', toolCallId: `c${seq - 1}`, content: [{ type: 'text', text: text(AVG * 4) }], isError: false }] } }, sourceEventSeqs: [seq - 1], surfaceOp: 'append' })
   } else if (kind === 6) {
     events.push({ type: 'step/start', seq, time, data: { turn, step: 1 } })
   } else if (kind === 7) {

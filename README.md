@@ -1,7 +1,7 @@
 # dsh-large-proj-perf
 
 [![Version](https://img.shields.io/badge/version-1.2.0-blue)]()
-[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.1.5--rc.2-green)]()
+[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.1.7--rc.1-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、分片投影预热、fork 缓存回填、
@@ -16,7 +16,7 @@ DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、分片投影�
 
 | 能力 | 解决什么 | 0.1.3-alpha.2 实测 | 状态 |
 |---|---|---|---|
-| 零拷贝 fork | fork 时逐事件 `snapshotJsonValue` 深拷贝阻塞 | 50ms → 5.6ms（真实环境） | 活跃（0.1.3 走 `create(eventState:'shared-frozen')` 通道） |
+| 零拷贝 fork | fork 时逐事件 `snapshotJsonValue` 深拷贝阻塞 | 49ms → 5.9ms（0.1.7 真实环境） | 活跃（0.1.7 走 `create(eventState:'shared-frozen')` + `buildForkSeed` 通道） |
 | 分片投影预热 | 打开历史会话的同步冷折叠冻结事件循环 | 74 万事件 20min → ~200ms | 活跃 |
 | fork 缓存回填 | fork 子会话无投影缓存行，重开走全量读 | 分钟级 → 秒级 | 活跃（0.1.3 直读 `session.vN.jsonl.zstd` 多帧） |
 | 分片 materialize | fork 落盘单巨字符串：60 万事件 501MB、74 万直接 RangeError | 多帧 zstd，字节兼容 | 活跃（0.1.3 三参签名已适配） |
@@ -41,13 +41,16 @@ dsh 0.1.x 在大会话上有三类同步阻塞（源码级定位 + 实测）：
 对应方案（全部独立开关、失败自动回退官方实现）：
 
 1. **零拷贝 fork**：fork 的 seed 是 live 会话的 `snapshotEvents()`（事件在 append 时
-   已 deepFreeze）。改走 fromRestore 通道原地冻结复用引用：
-   - 0.1.3：`create({eventState:'shared-frozen'})` —— 复用原生
-     `_resolveForkSource`/`_forkSeed` 全部边界与 OPEN_TURN 校验；fromRestore 把
-     meta 直接当 header 校验，补丁补上 `version/id/createdAt`，并在 seed 尾部
-     注入 `session/end-seed {inherited:true}` marker（v2 磁盘校验要求
-     `cut == marker.seq`，原生快照通道自动追加、restore 通道不追加）；
-   - alpha.5 / rc.1：`prepare({seedSource:'persistence'})` 旧通道（协议自动探测）。
+   已 deepFreeze）。改走 fromRestore 通道原地冻结复用引用（三协议自动探测）：
+   - **0.1.7+**：复用原生 `_resolveForkSource` + `_forkBoundary` + 模块级
+     `buildForkSeed`（slice + 注入 `session/end-seed {inherited:true}` marker +
+     `openTurnClosers` 补 turn 闭合），只把 `create` 的写入通道换成
+     `eventState:'shared-frozen'`；`buildForkSeed` 新建的事件未冻结，送入前
+     原地深冻结（满足「已冻结或独立拥有」前提）；
+   - **0.1.3–0.1.5**：复用 `_forkSeed`，补丁补 `version/id/createdAt` 到 meta
+     并在 seed 尾部注入 inherited marker（磁盘校验要求 `cut == marker.seq`，
+     原生快照通道自动追加、restore 通道不追加）；
+   - **alpha.5 / rc.1**：`prepare({seedSource:'persistence'})` 旧通道。
 2. **分片投影预热**：会话进入且事件数超阈值时，抢在首次冷折叠前分片重放 cells
    （每片间 `setImmediate`/`setTimeout` 让出），直写 `registration.cells`；有投影
    缓存行时取基线跳过已折叠前缀；fork 子会话预热后回填缓存行。
@@ -78,6 +81,7 @@ dsh 0.1.x 在大会话上有三类同步阻塞（源码级定位 + 实测）：
 | 0.1.5-alpha.1 | 会话格式 **v3**（`SESSION_FORMAT_VERSION=3`）；cut/header 语义与 v2 一致，文件名 `session.v3.jsonl`；补丁点零行级变更 |
 | 0.1.5-rc.1 | 仅新增已知事件类型（`deliverables/presented`、`subagent/catalog`）；补丁点零变化 |
 | 0.1.5-rc.2 | 相对 rc.1 四个关键包源码零差异（仅版本号），无新增变更 |
+| 0.1.7-rc.1 | fork 内部重构：`_forkSeed` → `_forkBoundary` + 模块级 `buildForkSeed`；**open-turn 边界从「拒绝」改为「注入 turn 闭合事件」**；会话格式升 **v4**（cut/文件名语义同 v2/v3）；事件词汇收紧（`tool/result` role=`tool`、新增 `system/message`）。插件已适配（三协议探测） |
 
 ### 0.1.3-alpha.2 关键变化（已全部适配）
 
@@ -96,7 +100,7 @@ dsh 0.1.x 在大会话上有三类同步阻塞（源码级定位 + 实测）：
 
 ## 安装
 
-要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.1.5-rc.2`
+要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.1.7-rc.1`
 （`package.json` 已声明 `engines`）。
 
 ```sh
@@ -137,7 +141,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-dsh.ps1
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `zeroCopyFork` | `true` | 零拷贝 fork（0.1.3 协议自动探测） |
+| `zeroCopyFork` | `true` | 零拷贝 fork（三协议自动探测：0.1.7 fork-seed / 0.1.3 event-state / alpha.5 seed-source） |
 | `fastInitFor` | `true` | fast initFor（rc.8+ 自动退役；0.1.3 无此形态） |
 | `slowForkWarnMs` | `100` | fork 耗时告警阈值（ms） |
 | `warmupEnabled` | `true` | 大会话投影分片预热总开关 |
@@ -177,7 +181,7 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
 # 一次到位：junction 链接全局 dsh 的嵌套依赖（仓库无 node_modules）
 powershell -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 
-# 全套 7 套件 112 断言（含 verify_compat 对真实安装源码的特征断言）
+# 全套 7 套件 116 断言（含 verify_compat 对真实安装源码的特征断言）
 npm test
 ```
 

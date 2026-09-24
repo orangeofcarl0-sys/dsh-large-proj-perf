@@ -32,7 +32,7 @@ const dshRoot = join(dirname(sessionEntry), '..', '..', '..')
 const dshPkg = JSON.parse(readFileSync(join(dshRoot, 'package.json'), 'utf8'))
 
 // 插件开发/验证过的版本；不在列表里打 WARN（结构断言照跑，人工确认兼容性）
-const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2', '0.1.2-alpha.5', '0.1.2-rc.1', '0.1.3-alpha.2', '0.1.5-alpha.1', '0.1.5-rc.1', '0.1.5-rc.2']
+const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2', '0.1.2-alpha.5', '0.1.2-rc.1', '0.1.3-alpha.2', '0.1.5-alpha.1', '0.1.5-rc.1', '0.1.5-rc.2', '0.1.7-rc.1']
 console.log(`dsh version: ${dshPkg.version} (root: ${dshRoot})`)
 if (!KNOWN_VERSIONS.includes(dshPkg.version)) {
   warn(`dsh ${dshPkg.version} not in known list ${KNOWN_VERSIONS.join('/')}`, 'verify compatibility manually')
@@ -43,8 +43,14 @@ const src = (pkg, file) => readFileSync(join(dshRoot, 'node_modules', '@deepseek
 // ---- dsh-session：fork 通道（零拷贝 fork 依赖） ----
 const sessionSrc = src('dsh-session')
 check('fork source present', sessionSrc.includes('fork(source, boundary, childSessionId)'))
-check('fork internals (_resolveForkSource/_forkSeed/prepare/enter/announce) present',
-  ['_resolveForkSource', '_forkSeed', 'prepare(id, options)', 'enter(', 'announce('].every((m) => sessionSrc.includes(m)))
+// fork 内部结构：0.1.7+ = _resolveForkSource + _forkBoundary + 模块级
+// buildForkSeed（含 marker 注入与 openTurnClosers）；0.1.3–0.1.5 = _forkSeed
+const forkInternalsNew = ['_resolveForkSource', '_forkBoundary', 'prepare(id, options)', 'enter(', 'announce('].every((m) => sessionSrc.includes(m))
+  && sessionSrc.includes('function buildForkSeed')
+const forkInternalsLegacy = ['_resolveForkSource', '_forkSeed', 'prepare(id, options)', 'enter(', 'announce('].every((m) => sessionSrc.includes(m))
+check('fork internals present (0.1.7 forkBoundary+buildForkSeed, or legacy forkSeed)',
+  forkInternalsNew || forkInternalsLegacy,
+  forkInternalsNew ? '(0.1.7 protocol)' : forkInternalsLegacy ? '(legacy protocol)' : '')
 // 0.1.3：create(childId, {eventState}) 是 fromRestore 零拷贝通道的公开入口
 check('restore channel (eventState shared-frozen -> fromRestore) present',
   sessionSrc.includes('case "shared-frozen"') && sessionSrc.includes('Session.fromRestore'))
@@ -109,6 +115,16 @@ check('SessionLogOffset imported into cache package', cacheSrc.includes('Session
 // ---- 动态导出检查 ----
 const dshSession = await import('@deepseek-ai/dsh-session')
 check('SessionLogOffset exported at runtime', typeof dshSession.SessionLogOffset === 'function')
+// 0.1.7+：零拷贝 fork 依赖 buildForkSeed（模块级导出）；旧版本无此导出属正常
+if (typeof dshSession.buildForkSeed !== 'function') {
+  check('buildForkSeed export (0.1.7 fork-seed protocol)', forkInternalsLegacy && !forkInternalsNew,
+    '(absent but legacy protocol present → zero-copy uses legacy branch)')
+} else {
+  check('buildForkSeed export (0.1.7 fork-seed protocol)', typeof dshSession.buildForkSeed === 'function')
+}
+// 格式版本探针：升级时用于感知格式线变化（当前 4；v2/v3/v4 的 cut 语义一致）
+check('SESSION_FORMAT_VERSION exposed (format probe)', typeof dshSession.SESSION_FORMAT_VERSION === 'number',
+  `v${dshSession.SESSION_FORMAT_VERSION}`)
 
 console.log(failures === 0 ? (warns > 0 ? `\nALL PASS (${warns} warning(s))` : '\nALL PASS') : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)
