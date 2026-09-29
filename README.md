@@ -1,7 +1,7 @@
 # dsh-large-proj-perf
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue)]()
-[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.1.7--rc.2-green)]()
+[![Version](https://img.shields.io/badge/version-1.3.0-blue)]()
+[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.2.0--rc.2-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、分片投影预热、fork 缓存回填、
@@ -99,6 +99,7 @@ title 前驱提示，**不能作折叠短路**——补行与基线复用会静�
 | 0.1.5-rc.1 | 仅新增已知事件类型（`deliverables/presented`、`subagent/catalog`）；补丁点零变化 |
 | 0.1.5-rc.2 | 相对 rc.1 四个关键包源码零差异（仅版本号），无新增变更 |
 | 0.1.7-rc.2 | 新增 `toolHistory()` 增量折叠（游标只消费新事件）；persistence/format/projection-cache 零差异，补丁点无变化 |
+| 0.2.0-rc.2 | 主版本升级。**插件管理引入严格 peer 门禁**（见下）；`dsh-session` 重构 tail-repair 并新增 `ToolCallRecovery`（`buildForkSeed`/`SESSION_FORMAT_VERSION` 等导出不变）；`llm-deepseek` 拆分为 `-api-key`/`-account`；四个补丁点与 projection-cache 零破坏 |
 | 0.1.7-rc.1 | fork 内部重构：`_forkSeed` → `_forkBoundary` + 模块级 `buildForkSeed`；**open-turn 边界从「拒绝」改为「注入 turn 闭合事件」**；会话格式升 **v4**（cut/文件名语义同 v2/v3）；事件词汇收紧（`tool/result` role=`tool`、新增 `system/message`）。插件已适配（三协议探测） |
 
 ### 0.1.3-alpha.2 关键变化（已全部适配）
@@ -113,12 +114,12 @@ title 前驱提示，**不能作折叠短路**——补行与基线复用会静�
   事件词汇收紧（`assistant/message` 需 `data.stream`、消息 `id/source/role` 校验）。
 
 升级 dsh 后：启动日志显示 `dsh version: x.y.z (verified)`（版本探针）或列表外
-版本告警；跑 `node tests/verify_compat.mjs`（对真实安装源码做结构断言，当前
-25 项）；确认无 `signature mismatch` 告警。
+版本告警；跑 `node tests/verify_compat.mjs`（对真实安装源码做结构断言 + peer 门禁
+离线复算，当前 30 项）；确认无 `signature mismatch` 告警。
 
 ## 安装
 
-要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.1.7-rc.2`
+要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.2.0-rc.2`
 （`package.json` 已声明 `engines`）。
 
 ```sh
@@ -133,6 +134,32 @@ dsh plugin --profile web add file:<本仓库路径>
 > `<DSH_HOME>/profiles/web/node_modules/dsh-large-proj-perf/`（`file:` 安装
 > 不自动跟随），或重新 `dsh plugin add`。重启 `dsh web` 生效，日志出现
 > `[dsh-perf] installed (...)` 即成功。
+
+### 插件管理：0.2.0 的 peer 门禁（重要）
+
+dsh 0.2.0 起，profile bundle 加载前会校验插件 `package.json` 的
+`peerDependencies` 中**所有 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 项**：
+运行时版本不满足 range 即**跳过整个插件**（启动日志打
+`skipping profile bundle "<name>": ... incompatible with dsh <ver>`），可用
+`dsh plugin allow-version <pkg>@<ver> --profile web` 做精确版本豁免。
+
+本插件的声明（0.2.0 契约的显式兼容声明）：
+
+```json
+"peerDependencies": {
+  "@deepseek-ai/cordis": "^4.0.1",
+  "@deepseek-ai/dsh": ">=0.1.0-rc.6 <0.3.0-0",
+  "@deepseek-ai/dsh-session": ">=0.1.0-rc.6 <0.3.0-0"
+}
+```
+
+- 只声明我们**真实依赖**的东西：`dsh-session`（`snapshotEvents`/`buildForkSeed`/
+  `SessionLogOffset`）与 `dsh`（版本探针）；
+- 上界 `<0.3.0-0` 覆盖整个 0.1.x–0.2.x 线：既让门禁能替我们守住兼容边界，
+  又不会在小版本推进时误杀自己。**升级 dsh 大版本（0.3+）前需先更新此范围**；
+- `verify_compat.mjs` 会用 dsh 自带的 semver **离线复算**同一条门禁规则
+  （`plugin contract: declared dsh peers satisfy runtime version`）——离线报警
+  = 重启后必被跳过。
 
 ### 大会话内存（推荐启动方式）
 
@@ -199,7 +226,7 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
 # 一次到位：junction 链接全局 dsh 的嵌套依赖（仓库无 node_modules）
 powershell -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 
-# 全套 7 套件 116 断言（含 verify_compat 对真实安装源码的特征断言）
+# 全套 7 套件 121 断言（含 verify_compat 对真实安装源码的特征断言）
 npm test
 ```
 

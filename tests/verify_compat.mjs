@@ -32,7 +32,7 @@ const dshRoot = join(dirname(sessionEntry), '..', '..', '..')
 const dshPkg = JSON.parse(readFileSync(join(dshRoot, 'package.json'), 'utf8'))
 
 // 插件开发/验证过的版本；不在列表里打 WARN（结构断言照跑，人工确认兼容性）
-const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2', '0.1.2-alpha.5', '0.1.2-rc.1', '0.1.3-alpha.2', '0.1.5-alpha.1', '0.1.5-rc.1', '0.1.5-rc.2', '0.1.7-rc.1', '0.1.7-rc.2']
+const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2', '0.1.2-alpha.5', '0.1.2-rc.1', '0.1.3-alpha.2', '0.1.5-alpha.1', '0.1.5-rc.1', '0.1.5-rc.2', '0.1.7-rc.1', '0.1.7-rc.2', '0.2.0-rc.2']
 console.log(`dsh version: ${dshPkg.version} (root: ${dshRoot})`)
 if (!KNOWN_VERSIONS.includes(dshPkg.version)) {
   warn(`dsh ${dshPkg.version} not in known list ${KNOWN_VERSIONS.join('/')}`, 'verify compatibility manually')
@@ -129,6 +129,24 @@ if (typeof dshSession.buildForkSeed !== 'function') {
 // 格式版本探针：升级时用于感知格式线变化（当前 4；v2/v3/v4 的 cut 语义一致）
 check('SESSION_FORMAT_VERSION exposed (format probe)', typeof dshSession.SESSION_FORMAT_VERSION === 'number',
   `v${dshSession.SESSION_FORMAT_VERSION}`)
+
+// ---- 0.2.0 插件契约：peer 门禁自检 ----
+// dsh 0.2.0 起，profile bundle 加载前校验插件 package.json 的 peerDependencies
+// 中所有 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 项：运行时版本不满足 range
+// 即跳过整个插件（可用 `dsh plugin allow-version` 显式豁免）。这里用 dsh 自带的
+// semver 离线复算同一规则——离线不满足意味着重启后插件会被静默跳过。
+const pluginPkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+const dshPeers = Object.entries(pluginPkg.peerDependencies ?? {})
+  .filter(([name]) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'))
+check('plugin contract: declares dsh peer range (0.2.0 gating input)', dshPeers.length > 0,
+  dshPeers.map(([n, r]) => `${n}@${r}`).join(', '))
+let semver = null
+try { semver = createRequire(join(dshRoot, 'package.json'))('semver') } catch { /* 缺失则跳过复算 */ }
+if (semver !== null && dshPeers.length > 0) {
+  const mismatched = dshPeers.filter(([, range]) => !semver.satisfies(dshPkg.version, range, { includePrerelease: true }))
+  check('plugin contract: declared dsh peers satisfy runtime version', mismatched.length === 0,
+    mismatched.length === 0 ? `dsh ${dshPkg.version} within declared range` : `WOULD BE SKIPPED: ${mismatched.map(([n, r]) => `${n}@${r}`).join(', ')}`)
+}
 
 console.log(failures === 0 ? (warns > 0 ? `\nALL PASS (${warns} warning(s))` : '\nALL PASS') : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)
