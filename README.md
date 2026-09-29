@@ -226,7 +226,10 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
 # 一次到位：junction 链接全局 dsh 的嵌套依赖（仓库无 node_modules）
 powershell -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 
-# 全套 7 套件 121 断言（含 verify_compat 对真实安装源码的特征断言）
+# 全套 8 套件 138 断言
+#  - verify_compat：对真实安装源码做特征断言 + peer 门禁离线复算
+#  - e2e_real_components：直接驱动 dsh 真实实现类（真实 JsonlSessionPersistence
+#    / SessionProjectionRegistry / SessionStore），逐点位验证补丁安装与行为
 npm test
 ```
 
@@ -241,6 +244,8 @@ lib/api.js              stats/config HTTP 端点
 lib/warmup.js           分片投影预热 + fork 缓存回填
 lib/backfill.js         磁盘冷会话补行（readRaw / 0.1.3 直读双通道）
 lib/patches/*.js        零拷贝 fork / fast initFor / 冷会话 LRU / 分片 materialize
+tests/                  verify_compat（真实源码特征 + 门禁复算）/ e2e_real_components
+                        （真实实现类端到端）/ smoke_*、test_*（mock 逻辑与边界）
 ```
 
 补丁安装原则：**特征校验先行**（`String(原型方法)` 含特征字面量，不匹配打
