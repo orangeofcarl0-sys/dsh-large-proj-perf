@@ -1,14 +1,19 @@
 {
   "name": "dsh-large-proj-perf",
   "version": "1.3.0",
-  "description": "DSH 大会话性能插件：零拷贝 fork + fast initFor + 投影分片预热 + fork 缓存回填 + 分片 materialize + 冷会话 LRU 裁剪 + heap 检测（DeepSeek Harness / DSH）",
+  "description": "DSH 大会话性能插件：零拷贝 fork + 投影分片预热 + fork 缓存回填 + 分片 materialize + 冷会话内存治理 + heap 检测（DeepSeek Harness / DSH）",
   "type": "module",
   "main": "lib/index.js",
   "engines": {
     "node": ">=22.15.0"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "test": "node tests/verify_compat.mjs && node tests/smoke_fork.mjs && node tests/test_fast_initfor.mjs && node tests/test_cache_trim.mjs && node tests/smoke_warmup.mjs && node tests/test_chunked_materialize.mjs && node tests/test_backfill.mjs && node tests/e2e_real_components.mjs"
+    "test": "node tests/verify_compat.mjs && node tests/smoke_fork.mjs && node tests/test_fast_initfor.mjs && node tests/test_cache_trim.mjs && node tests/smoke_warmup.mjs && node tests/test_chunked_materialize.mjs && node tests/test_backfill.mjs && node tests/e2e_real_components.mjs",
+    "prepublishOnly": "npm test",
+    "pack:check": "npm pack --dry-run"
   },
   "exports": {
     ".": {
@@ -19,7 +24,10 @@
   "files": [
     "lib",
     "scripts",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "license": "MIT",
   "repository": {

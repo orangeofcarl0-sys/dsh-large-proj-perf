@@ -1,0 +1,15 @@
+# npm 发布排除项。注意：package.json 的 "files" 字段是白名单，已优先于本文件；
+# 这里主要防御未来 files 放宽后误发开发产物。
+tests/
+scripts/*.bak*
+node_modules/
+.pnpm-store/
+*.log
+*.tgz
+.DS_Store
+.git/
+.gitignore
+.github/
+.vscode/
+PUBLISHING.md
+.npmignore
