@@ -244,8 +244,10 @@ lib/api.js              stats/config HTTP 端点
 lib/warmup.js           分片投影预热 + fork 缓存回填
 lib/backfill.js         磁盘冷会话补行（readRaw / 0.1.3 直读双通道）
 lib/patches/*.js        零拷贝 fork / fast initFor / 冷会话 LRU / 分片 materialize
+tests/run.mjs           测试运行器：每个套件独立子进程（隔离内存，避免累积崩溃）
 tests/                  verify_compat（真实源码特征 + 门禁复算）/ e2e_real_components
                         （真实实现类端到端）/ smoke_*、test_*（mock 逻辑与边界）
+tools/                  开发者专用脚本（不随 npm 包发布）
 ```
 
 补丁安装原则：**特征校验先行**（`String(原型方法)` 含特征字面量，不匹配打

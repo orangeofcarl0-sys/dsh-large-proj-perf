@@ -11,7 +11,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node tests/verify_compat.mjs && node tests/smoke_fork.mjs && node tests/test_fast_initfor.mjs && node tests/test_cache_trim.mjs && node tests/smoke_warmup.mjs && node tests/test_chunked_materialize.mjs && node tests/test_backfill.mjs && node tests/e2e_real_components.mjs",
+    "test": "node tests/run.mjs",
     "prepublishOnly": "npm test",
     "pack:check": "npm pack --dry-run"
   },

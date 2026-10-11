@@ -16,7 +16,7 @@
 | `engines.node` | `>=22.15.0` | 依赖 `node:zlib` 的 zstd 接口 |
 | `peerDependencies` | 真实依赖的 dsh 包 + `@deepseek-ai/cordis` | dsh 0.2.0 起据此做加载门禁 |
 | `dsh.bundle.patch` | `./cordis.patch.yml` | dsh 加载插件的必需声明 |
-| `scripts.prepublishOnly` | `npm test` | 发布前强制跑全套测试 |
+| `scripts.prepublishOnly` | `npm test`（→ `tests/run.mjs`，逐套件独立子进程） | 发布前强制跑全套测试 |
 
 注意：声明 `files` 白名单后，npm 只自动附带 `package.json`、`README*`、`LICENSE*`
 与 `main` 指向的文件——`CHANGELOG.md` 必须显式列入白名单才会发布。
@@ -39,8 +39,17 @@ grep '"version"' package.json
 ```
 
 打包内容应只含：`LICENSE`、`README.md`、`CHANGELOG.md`、`cordis.patch.yml`、
-`package.json`、`lib/**`、`scripts/*.ps1`。**不应**出现 `tests/`、`*.log`、`*.tgz`、
-`node_modules/`。
+`package.json`、`lib/**`、`scripts/*.ps1`。**不应**出现 `tests/`、`tools/`、`*.log`、
+`*.tgz`、`node_modules/`。
+
+> `scripts/` 会被发布（用户需要 `start-dsh.ps1` / `link-deps.ps1`）；
+> **开发者专用脚本放 `tools/`**（不在 `files` 白名单内，不会发布），
+> 例如写入 npm token 的 `tools/set-npm-token.sh`。
+
+`prepublishOnly` 跑的是 `npm test` → `tests/run.mjs`，它让**每个套件在独立子进程中**
+执行：早期版本把所有套件串在同一个 Node 进程里，重负载套件（zstd 压缩/解压数十 MB）
+累积的堆碎片会在发布时偶发触发 V8 崩溃（实测 exit 134），从而阻断发布。子进程隔离
+既消除该崩溃，也让单个套件的失败不掩盖其余套件的结论。
 
 ## 发布
 
