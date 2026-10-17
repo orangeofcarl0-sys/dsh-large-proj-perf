@@ -10,12 +10,14 @@
 | 包名 | 非 scoped，`dsh-` 前缀 | `dsh-better-sidebar` / `dsh-spend` / `dsh-fresh-start` |
 | `publishConfig.access` | `public` | 所有权威插件均显式声明（防误设私有 / 发布被拒） |
 | `type` | `module` | 官方包与社区插件一致（ESM） |
-| `main` / `exports` | `lib/index.js` + `.` 与 `./package.json` | 官方包 `exports` 亦含 `./package.json` |
-| `files` | 白名单：`lib`、`scripts`、`cordis.patch.yml`、`README.md`、`CHANGELOG.md`、`LICENSE` | 社区插件用白名单；避免发测试与开发产物 |
+| `main` / `exports` | `lib/index.js`，并显式暴露 `./locale/*.json`、`./cordis.patch.yml`、`./package.json` | 宿主经 Node 解析读取 locale 与 patch 子路径，未导出则读不到 |
+| `files` | 白名单：`lib`、`scripts`、`docs`、`locale/*.json`、`icon.svg`、`cordis.patch.yml`、`README.md`、`CHANGELOG.md`、`LICENSE` | 社区插件用白名单；避免发测试与开发产物 |
 | `license` / `repository` / `bugs` / `homepage` | 齐备 | 官方包与社区插件均齐备 |
 | `engines.node` | `>=22.15.0` | 依赖 `node:zlib` 的 zstd 接口 |
-| `peerDependencies` | 真实依赖的 dsh 包 + `@deepseek-ai/cordis` | dsh 0.2.0 起据此做加载门禁 |
+| `engines.dsh` | `>=0.1.0-rc.6 <0.3.0-0` | dsh 0.2.1+ 的加载门禁只读此项 |
+| `peerDependencies` | 真实依赖的 dsh 包 + `@deepseek-ai/cordis` | 0.2.0 及之前的门禁读此项；与 `engines.dsh` 保持一致 |
 | `dsh.bundle.patch` | `./cordis.patch.yml` | dsh 加载插件的必需声明 |
+| `icon` + `locale/*.json` | `./icon.svg` + 双语标题/描述 | 插件管理器的展示元数据；缺了退化为裸包名 |
 | `scripts.prepublishOnly` | `npm test`（→ `tests/run.mjs`，逐套件独立子进程） | 发布前强制跑全套测试 |
 
 注意：声明 `files` 白名单后，npm 只自动附带 `package.json`、`README*`、`LICENSE*`
@@ -39,8 +41,8 @@ grep '"version"' package.json
 ```
 
 打包内容应只含：`LICENSE`、`README.md`、`CHANGELOG.md`、`cordis.patch.yml`、
-`package.json`、`lib/**`、`scripts/*.ps1`。**不应**出现 `tests/`、`tools/`、`*.log`、
-`*.tgz`、`node_modules/`。
+`icon.svg`、`locale/*.json`、`docs/**`、`package.json`、`lib/**`、`scripts/*.ps1`。
+**不应**出现 `tests/`、`tools/`、`*.log`、`*.tgz`、`node_modules/`。
 
 > `scripts/` 会被发布（用户需要 `start-dsh.ps1` / `link-deps.ps1`）；
 > **开发者专用脚本放 `tools/`**（不在 `files` 白名单内，不会发布），
@@ -76,7 +78,7 @@ npm publish
 - 破坏插件自身 API（配置键移除、导出变更）→ major（`2.0.0`）。
 
 升级 dsh 大版本（如 0.3）时，**必须同步更新 `peerDependencies` 的范围上界**，
-否则 dsh 会因门禁跳过本插件（见 README「插件管理：0.2.0 的 peer 门禁」）。
+否则 dsh 会因门禁跳过本插件（见 `docs/COMPATIBILITY.md`「dsh 版本门禁」）。
 
 ## 安装（面向用户）
 

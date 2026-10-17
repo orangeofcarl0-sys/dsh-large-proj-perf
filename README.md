@@ -4,260 +4,111 @@
 [![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.2.1--rc.2-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、分片投影预热、fork 缓存回填、
-分片 materialize、冷会话内存治理——一次装齐，消除 fork / 历史加载 / 落盘对超大会话
-（数十万事件）的事件循环阻塞与 OOM。
+DSH（DeepSeek Harness）大会话性能插件。消除 fork、历史会话加载、超大会话落盘对
+事件循环的阻塞，并治理冷会话内存——面向数十万事件的会话。
 
-所有优化带**源码特征校验 + 协议探测 + 三层回退**（能力探测 / try-catch / 配置开关），
-不匹配自动跳过、绝不盲补；上游吸收了某项能力后对应补丁**自动从 `active` 转
-`retired`**——插件按项逐项退役，最终全部 `retired` 之日即整体退役之时。
+所有优化都带**源码特征校验 + 协议探测 + 三层回退**（能力探测 / try-catch / 配置
+开关）：dsh 内部结构变化时补丁自动跳过并告警，绝不盲补。上游原生实现了某项能力后，
+对应补丁自动从 `active` 转为 `retired`。
 
-## 特性一览
+## 能力与效果
 
-| 能力 | 解决什么 | 0.1.3-alpha.2 实测 | 状态 |
+| 能力 | 症状 | 效果 | 当前状态 |
 |---|---|---|---|
-| 零拷贝 fork | fork 时逐事件 `snapshotJsonValue` 深拷贝阻塞 | 49ms → 5.9ms（0.1.7 真实环境） | 活跃（0.1.7 走 `create(eventState:'shared-frozen')` + `buildForkSeed` 通道） |
-| 分片投影预热 | 打开历史会话的同步冷折叠冻结事件循环 | 74 万事件 20min → ~200ms | 活跃 |
-| fork 缓存回填 | fork 子会话无投影缓存行，重开走全量读 | 分钟级 → 秒级 | 活跃（0.1.3 直读 `session.vN.jsonl.zstd` 多帧） |
-| 分片 materialize | fork 落盘单巨字符串：60 万事件 501MB、74 万直接 RangeError | 多帧 zstd，字节兼容 | 活跃（0.1.3 三参签名已适配） |
-| 冷会话 LRU 裁剪 | 冷会话事件树 ~700MB/个 ×5 叠加 OOM | 省 ~2.8GB | 0.1.3 上游系统修复（`coldLogMemo=2`），补丁自动跳空 |
-| fast initFor | persistence 的 `structuredClone(seed)` 深拷贝 | 135ms → ~0ms | 已退役（rc.8 起上游原生；0.1.3 coordinator 移除） |
-| heap 检测 | V8 heap 上限过低告警 | 运维辅助 | 活跃 |
+| 零拷贝 fork | fork 逐事件 `snapshotJsonValue` 深拷贝 | 49ms → 5.9ms | 活跃 |
+| 分片投影预热 | 打开历史会话时同步冷折叠冻结事件循环 | 74 万事件 20 分钟 → ~200ms | 活跃 |
+| fork 缓存回填 | 子会话无投影缓存行，重开走全量读 | 分钟级 → 秒级 | 活跃 |
+| 分片 materialize | 落盘单巨字符串：60 万事件 501MB、74 万 RangeError | 多帧 zstd，字节兼容 | 活跃 |
+| 冷会话 LRU 裁剪 | 冷会话事件树 ~700MB/个 × 5 叠加 OOM | 省 ~2.8GB | 上游已代偿 |
+| fast initFor | persistence 的 `structuredClone(seed)` | 135ms → ~0ms | 已退役 |
+| heap 检测 | V8 heap 上限过低无提示 | 启动告警并给出参数建议 | 活跃 |
 
-运行时各补丁的实际状态经 `stats.get` 的 `patches` 字段暴露：
-`active`（已安装生效）/ `retired`（上游已原生实现）/ `inactive`（环境缺失或特征
-漂移）/ `off`（配置关闭）。
-
-## 工作原理
-
-dsh 0.1.x 在大会话上有三类同步阻塞（源码级定位 + 实测）：
-
-| 问题 | 环节 | 实测 |
-|---|---|---|
-| A. fork 深拷贝 | `Session` 构造器逐事件 `snapshotJsonValue` + 旧 persistence `initFor` 的 `structuredClone(seed)` | 18.2MB / 20k 事件合计 ~480ms |
-| B. projection 冷折叠 | `cellFor()` 冷时同步 `buildCell` 全量折叠 | 74 万事件阻塞 20+ 分钟（100% 单核） |
-| C. fork 全量序列化 | `encodeMaterialization` 一次性序列化整个 seed | 60 万事件 501MB 单串；74 万 RangeError |
-
-对应方案（全部独立开关、失败自动回退官方实现）：
-
-1. **零拷贝 fork**：fork 的 seed 是 live 会话的 `snapshotEvents()`（事件在 append 时
-   已 deepFreeze）。改走 fromRestore 通道原地冻结复用引用（三协议自动探测）：
-   - **0.1.7+**：复用原生 `_resolveForkSource` + `_forkBoundary` + 模块级
-     `buildForkSeed`（slice + 注入 `session/end-seed {inherited:true}` marker +
-     `openTurnClosers` 补 turn 闭合），只把 `create` 的写入通道换成
-     `eventState:'shared-frozen'`；`buildForkSeed` 新建的事件未冻结，送入前
-     原地深冻结（满足「已冻结或独立拥有」前提）；
-   - **0.1.3–0.1.5**：复用 `_forkSeed`，补丁补 `version/id/createdAt` 到 meta
-     并在 seed 尾部注入 inherited marker（磁盘校验要求 `cut == marker.seq`，
-     原生快照通道自动追加、restore 通道不追加）；
-   - **alpha.5 / rc.1**：`prepare({seedSource:'persistence'})` 旧通道。
-2. **分片投影预热**：会话进入且事件数超阈值时，抢在首次冷折叠前分片重放 cells
-   （每片间 `setImmediate`/`setTimeout` 让出），直写 `registration.cells`；有投影
-   缓存行时取基线跳过已折叠前缀；fork 子会话预热后回填缓存行。
-3. **分片 materialize**：每 `materializeChunkEvents` 事件一个 zstd frame（多帧是
-   解码端 `scanZstdFrames` 的原生格式，字节兼容），消除单巨字符串。0.1.3 头帧
-   直接复用上游 `encodeCurrentHeader` 编码器（`original(meta, inheritedEventCount,
-   [])` 只产 header 帧），不重写格式层。
-4. **冷会话 LRU 裁剪**：运行时把 `SessionPreparations.capacity` 降到
-   `preparedCacheSize`（默认 1）并淘汰最旧 ready 条目；`config.set` 即时生效，
-   dispose 恢复原容量。0.1.3 起上游以 `COLD_LOG_MEMO_MAX_ENTRIES = 2` + handle
-   模型懒 materialize 系统代偿，该补丁在上游 0.1.3 自动跳空（老版本仍活跃）。
-5. **fast initFor**：`structuredClone(seed)` → 冻结引用复用；rc.8 起上游原生实现，
-   补丁自动退役（0.1.3 连 `PersistenceCoordinator` 本体也已移除）。
-6. **heap 检测**：heap 上限低于阈值（默认 6GB）时告警并提示
-   `--max-old-space-size`。
-
-安全性：共享冻结引用与深拷贝语义等价（事件进入源会话时已完整校验并深冻结）；
-三层回退保证任何不匹配都不破坏上游行为。
-
-### 加载侧：上游已优化的部分与插件的作用点
-
-长对话「打开」的成本分三段，0.1.3–0.1.7 期间上游已优化前两段：
-
-| 阶段 | 上游现状（0.1.7） | 插件是否介入 |
-|---|---|---|
-| 磁盘解码 | 逐帧 zstd 解码 + 增量 `SessionLogScanner`（不拼整串），每 500ms `scheduler.yield()` 让出事件循环 | 否（上游已良好） |
-| 老格式迁移 | 格式 < v4 的会话经 v0→v1→v2→v3→v4 链，**在 Worker Thread 内完成**并发布新世代文件（`session.vN.jsonl`） | 否（上游已良好） |
-| 投影折叠 | `cellFor` 冷时**同步全量** `buildCell`（仍在主线程） | **是**：分片预热 + 缓存行基线（见下） |
-| 落盘编码 | `encodeMaterialization` 单 body 帧（fork 子会话首次落盘可能 501MB 单串） | **是**：分片 zstd 多帧 |
-
-插件写/读投影缓存行时必须使用与上游 `identityOf` 一致的键：`createdAt`/`cwd`/
-`isSeeded`/`inheritedEventCount` 以及 **0.1.3 起新增的 `formatVersion`**
-（= `header.version`）。上传 identity 缺 `formatVersion` 时，上游只把它当作
-title 前驱提示，**不能作折叠短路**——补行与基线复用会静默失效（此坑已于 1.2.0
-修复并有回归断言守护）。
-
-## 支持版本
-
-| 版本线 | 形态 |
-|---|---|
-| 0.1.0-rc.6 / rc.7 / rc.8 | fork `prepare(seedSource)` 通道；initFor `structuredClone` 形态 |
-| 0.1.1-rc.1 / rc.2 | 同 alpha.5 形态；rc.2 为 `(meta, events)` 裸 meta 签名 |
-| 0.1.2-alpha.5 / 0.1.2-rc.1 | `snapshotEvents()`；fork meta `isSeeded`+`inheritedEventCount`；`(storage, events)` 签名 |
-| 0.1.3-alpha.2 | persistence 子系统重写（见下）；投影缓存 identity 新增 `formatVersion`（插件已跟进） |
-| 0.1.5-alpha.1 | 会话格式 **v3**（`SESSION_FORMAT_VERSION=3`）；cut/header 语义与 v2 一致，文件名 `session.v3.jsonl`；补丁点零行级变更 |
-| 0.1.5-rc.1 | 仅新增已知事件类型（`deliverables/presented`、`subagent/catalog`）；补丁点零变化 |
-| 0.1.5-rc.2 | 相对 rc.1 四个关键包源码零差异（仅版本号），无新增变更 |
-| 0.1.7-rc.2 | 新增 `toolHistory()` 增量折叠（游标只消费新事件）；persistence/format/projection-cache 零差异，补丁点无变化 |
-| 0.1.7-rc.1 | fork 内部重构：`_forkSeed` → `_forkBoundary` + 模块级 `buildForkSeed`；**open-turn 边界从「拒绝」改为「注入 turn 闭合事件」**；会话格式升 **v4**（cut/文件名语义同 v2/v3）；事件词汇收紧（`tool/result` role=`tool`、新增 `system/message`）。插件已适配（三协议探测） |
-| 0.2.0-rc.2 | 主版本升级。**插件管理引入严格 peer 门禁**（见下）；`dsh-session` 重构 tail-repair 并新增 `ToolCallRecovery`（`buildForkSeed`/`SESSION_FORMAT_VERSION` 等导出不变）；`llm-deepseek` 拆分为 `-api-key`/`-account`；四个补丁点与 projection-cache 零破坏 |
-| 0.2.1-rc.1 | **门禁新增 `engines.dsh` 且独占生效**（声明后 peer 范围被忽略，见下）；jsonl 后端改为 cordis 插件形态（只导出 `name`/`apply`/`Config`，不再导出 `default` 类）；persistence 全面改为 `ctx.effect` 资源生命周期 + 并发 listing 限流（`listConcurrency`）；`dsh-session` 新增插件记录 API（`appendPluginRecord`/`pluginRecordOf`）；投影 `register()` 改为直接返回 effect。**fork 通道与四个补丁点源码零变化**，但预热修了两个真实缺陷（见 1.3.1） |
-| 0.2.1-rc.2 | **纯版本刷新**：`dsh-session`、`dsh-session-persistence(-jsonl)`、`dsh-session-projection(-cache)`、`dsh-app-boot`、`dsh-agent-loop`、`dsh-web-app`、`dsh-plugin-manager`、`dsh-host-webserver`、`dsh-home-paths` 等 13 个关键包 rc.1→rc.2 **逐字节相同**。唯一实质变更在 `dsh-web-app/cordis.patch.yml`：新增 UI 条目 `ui-deepseek-model-label-1017`（官方临时模型角标包），不触及任何插件作用点。插件侧仅需登记版本 + 补齐展示元数据 |
-
-### 0.1.3-alpha.2 关键变化（已全部适配）
-
-- `dsh-session-persistence` 变为 contract 层（`SessionPersistence` 基类 + 错误 +
-  校验），`PersistenceCoordinator`/`initFor`/`SessionPreparations` 移除；JSONL
-  实现移入 `dsh-session-persistence-jsonl`。
-- 格式 v0→v1→v2 迁移链（`dsh-session-format` 系列）；物理 header 移除
-  `seedLength`，seed cut 由事件流尾 `session/end-seed {inherited:true}` marker
-  表达（`cut == marker.seq`）；文件名变 `session.vN.jsonl[.zstd]`。
-- `encodeMaterialization(meta, events)` → `(meta, inheritedEventCount, events)`；
-  事件词汇收紧（`assistant/message` 需 `data.stream`、消息 `id/source/role` 校验）。
-
-升级 dsh 后：启动日志显示 `dsh version: x.y.z (verified)`（版本探针）或列表外
-版本告警；跑 `node tests/verify_compat.mjs`（对真实安装源码做结构断言 + 门禁实算，
-当前 31 项）；确认无 `signature mismatch` 告警。
+运行时状态经 `stats.get` 的 `patches` 字段暴露：`active`（已安装生效）、
+`retired`（上游已原生实现）、`inactive`（环境缺失或特征漂移）、`off`（配置关闭）。
 
 ## 安装
 
-要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.2.1-rc.2`
-（`package.json` 已声明 `engines.dsh`）。
+要求 Node **≥ 22.15.0**（`node:zlib` 的 zstd 接口），dsh `0.1.0-rc.6` ~ `0.2.1-rc.2`。
 
 ```sh
 # 从 GitHub 安装（推荐）
 dsh plugin --profile web add github:orangeofcarl0-sys/dsh-large-proj-perf
 
+# 从 npm 安装
+dsh plugin --profile web add dsh-large-proj-perf
+
 # 本地开发
 dsh plugin --profile web add file:<本仓库路径>
 ```
 
-> 修改仓库代码后需把 `lib/`、`cordis.patch.yml`、`package.json` 同步到
-> `<DSH_HOME>/profiles/web/node_modules/dsh-large-proj-perf/`（`file:` 安装
-> 不自动跟随），或重新 `dsh plugin add`。重启 `dsh web` 生效，日志出现
-> `[dsh-perf] installed (...)` 即成功。
+重启 `dsh web` 后，启动日志出现 `[dsh-perf] installed (...)` 即装载成功。
 
-### 插件管理：dsh 版本门禁（重要）
+> `file:` 安装不跟随源码改动。改完代码需把 `lib/`、`cordis.patch.yml`、
+> `package.json`、`icon.svg`、`locale/` 同步到
+> `<DSH_HOME>/profiles/web/node_modules/dsh-large-proj-perf/`，或重新 `dsh plugin add`。
 
-dsh 0.2.0 起，profile bundle 加载前会校验插件 `package.json` 的
-`peerDependencies` 中**所有 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 项**：
-运行时版本不满足 range 即**跳过整个插件**（启动日志打
-`skipping profile bundle "<name>": ... incompatible with dsh <ver>`），可用
-`dsh plugin allow-version <pkg>@<ver> --profile web` 做精确版本豁免。
+### 建议同时调高 V8 heap 上限
 
-**0.2.1 新增 `engines.dsh`，且它独占生效**：只要插件自己的 `package.json`
-声明了 `engines.dsh`，门禁就**只**看它，`peerDependencies` 里的 dsh 项被完全
-忽略（`unmetRequirements()` 的 `if (Object.hasOwn(engines, "dsh"))` 分支直接
-返回）。这是官方推荐的声明位置，也是本插件现在的声明方式：
-
-```json
-"engines": {
-  "node": ">=22.15.0",
-  "dsh": ">=0.1.0-rc.6 <0.3.0-0"
-},
-"peerDependencies": {
-  "@deepseek-ai/cordis": "^4.0.1",
-  "@deepseek-ai/dsh": ">=0.1.0-rc.6 <0.3.0-0",
-  "@deepseek-ai/dsh-session": ">=0.1.0-rc.6 <0.3.0-0"
-}
-```
-
-- 只声明我们**真实依赖**的东西：`dsh-session`（`snapshotEvents`/`buildForkSeed`/
-  `SessionLogOffset`）与 `dsh`（版本探针）；
-- 上界 `<0.3.0-0` 覆盖整个 0.1.x–0.2.x 线：既让门禁能替我们守住兼容边界，
-  又不会在小版本推进时误杀自己。**升级 dsh 大版本（0.3+）前需先更新此范围**；
-- `engines.dsh` 保留 `peerDependencies` 是**为旧版本兜底**：0.2.0 及之前不认
-  `engines.dsh`，只读 peer 范围——两处声明保持一致即可同时满足两代门禁；
-- `verify_compat.mjs` 直接 `import` 宿主真实的 `evaluatePluginCompatibility`
-  实算一遍（`plugin contract: real evaluatePluginCompatibility accepts runtime`），
-  拿不到该导出时回退到 semver 离线复算——报警 = 重启后必被跳过。
-
-### 插件清单规范：bundle 声明与展示元数据
-
-dsh 从插件 `package.json` 读取两类信息，缺一不可：
-
-| 用途 | 字段 | 说明 |
-|---|---|---|
-| **加载** | `dsh.bundle.patch` | bundle patch 文件路径（或路径数组），profile 加载时按序应用；缺它插件不会被当作 bundle |
-| **展示** | `icon` + `./locale/*.json` | 插件管理器 / 设置页的标题、描述、图标；缺了会退化为裸包名 |
-
-本插件的完整声明：
-
-```json
-"icon": "./icon.svg",
-"exports": {
-  ".": { "default": "./lib/index.js" },
-  "./locale/*.json": "./locale/*.json",
-  "./package.json": "./package.json",
-  "./cordis.patch.yml": "./cordis.patch.yml"
-},
-"files": ["lib", "scripts", "locale/*.json", "icon.svg", "cordis.patch.yml", "README.md", "CHANGELOG.md", "LICENSE"],
-"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
-```
-
-`locale/en.json` / `locale/zh.json` 的结构与官方 bundle 一致：
-
-```json
-{ "meta": { "title": "…", "description": "…" } }
-```
-
-注意 `exports` 必须显式暴露 `./locale/*.json` 与 `./cordis.patch.yml`——宿主通过
-`optionalResourcePath("<pkg>/locale/en.json")` 走 Node 解析读取，未导出的子路径读不到。
-图标走 `icon` 字段（相对路径，须在包目录内，≤256 KiB，支持 SVG/PNG/JPEG/WebP），
-也可改用 `exports` 暴露的 `./icon` 资源。
-
-### 大会话内存（推荐启动方式）
-
-多个超大会话的 live 事件树每个 ~700MB，默认 V8 heap 上限 ~4GB 会 OOM。插件已自动
-做冷会话治理，但 heap 上限是**启动期参数**，进程内改不了——推荐用仓库脚本启动（内置
-`--max-old-space-size=8192`）：
+多个大会话并存时，每个 live 事件树约 700MB，默认 ~4GB 上限容易 OOM。heap 上限是
+**启动期参数**，进程内改不了。用仓库脚本启动（内置 `--max-old-space-size=8192`）：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-dsh.ps1
 ```
 
-### 避免超长对话（主动规避）
-
-本插件是「被动优化」，无法削减**正在使用的** live 事件树（每会话几百 MB 是它的
-物理成本）。推荐配合 [dsh-fresh-start](https://github.com/orangeofcarl0-sys/dsh-fresh-start)：
-`/fresh` 一键「总结 → 开新会话 → 归档老会话」，主动控制会话规模。本插件兜底
-性能，fresh-start 控制规模。
+插件会在上限低于 6GB 时打告警，但不代为修改。
 
 ## 配置
 
-全部配置可经 Settings 卡片、`config.set` API 或 settings 持久化修改；数值项带下限
-钳制（非法值被拒绝或收敛到下限：`materializeChunkEvents ≥ 1000`、`chunkSize ≥ 1`、
-`preparedCacheSize ≥ 1` 等），NaN/Infinity 直接拒绝。
+可经 Settings 卡片、`config.set` API 或 settings 持久化修改。数值项带下限钳制
+（如 `materializeChunkEvents ≥ 1000`、`chunkSize ≥ 1`），NaN/Infinity 直接拒绝。
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `zeroCopyFork` | `true` | 零拷贝 fork（三协议自动探测：0.1.7 fork-seed / 0.1.3 event-state / alpha.5 seed-source） |
-| `fastInitFor` | `true` | fast initFor（rc.8+ 自动退役；0.1.3 无此形态） |
+| `zeroCopyFork` | `true` | 零拷贝 fork |
+| `fastInitFor` | `true` | fast initFor（新版 dsh 自动退役） |
 | `slowForkWarnMs` | `100` | fork 耗时告警阈值（ms） |
-| `warmupEnabled` | `true` | 大会话投影分片预热总开关 |
-| `minEvents` | `20000` | 低于此事件数不预热（同步冷折叠足够快） |
-| `chunkSize` | `5000` | 每片折叠事件数（下限 1；片间让出事件循环） |
-| `chunkYieldMs` | `0` | 让出方式：0=setImmediate；>0=setTimeout(ms) |
-| `warmOnCreated` | `true` | session/created（含 resume 的大会话）即预热 |
+| `warmupEnabled` | `true` | 投影分片预热总开关 |
+| `minEvents` | `20000` | 低于此事件数不预热 |
+| `chunkSize` | `5000` | 每片折叠事件数（片间让出事件循环） |
+| `chunkYieldMs` | `0` | 让出方式：0 = `setImmediate`，>0 = `setTimeout(ms)` |
+| `warmOnCreated` | `true` | `session/created`（含 resume）即预热 |
 | `backfillOnBoot` | `false` | 磁盘冷会话补投影缓存行（大文件解码同步，默认关） |
 | `backfillMaxSessions` | `8` | 补行扫描会话数上限 |
 | `backfillMinBytes` / `backfillMaxBytes` | `1MB` / `32MB` | 补行文件大小范围 |
-| `chunkedMaterialize` | `true` | 分片落盘（0.1.3 头帧复用上游编码器） |
+| `chunkedMaterialize` | `true` | 分片落盘 |
 | `materializeChunkEvents` | `50000` | 每帧事件数（下限 1000） |
-| `preparedCacheTrim` | `true` | 冷会话 LRU 裁剪总开关（false 恢复官方容量） |
-| `preparedCacheSize` | `1` | 裁剪目标容量（官方默认 5 → 1，省 ~2.8GB） |
-| `keepRecent` | `50` | 内存保留的最近记录数（fork/预热统计） |
+| `preparedCacheTrim` | `true` | 冷会话 LRU 裁剪总开关 |
+| `preparedCacheSize` | `1` | 裁剪目标容量（官方默认 5） |
+| `keepRecent` | `50` | 内存保留的最近统计记录数 |
 | `heapWarnBytes` | `6GB` | heap 上限告警阈值 |
 
-## API
+## 验证是否生效
 
-`POST http://127.0.0.1:3080/dsh-large-proj-perf/api/<method>`（回环 + 同源校验）：
+启动日志会打印探测到的 dsh 版本与各补丁安装结果：
+
+```
+[dsh-perf] dsh version: 0.2.1-rc.2 (verified)
+[dsh-perf] zero-copy fork installed (SessionStore.prototype.fork patched, protocol: 0.1.7 forkSeed)
+[dsh-perf] chunked materialize installed (chunk=50000 events/frame, protocol: 0.1.3)
+```
+
+出现 `signature mismatch` 说明 dsh 内部结构已变，对应补丁跳过（功能回退到官方实现，
+不会出错）。此时升级插件或运行兼容性检查：
+
+```sh
+node tests/verify_compat.mjs
+```
+
+### HTTP API
+
+`POST http://127.0.0.1:3080/dsh-large-proj-perf/api/<method>`（仅回环 + 同源）：
 
 | 端点 | 说明 |
 |---|---|
-| `stats.get` | `dshVersion` 版本探针、`patches` 各补丁状态（active/retired/inactive/off）、fork/预热/补行计数与最近记录 |
-| `stats.reset` | 清零计数与历史（保留版本探针与补丁状态） |
-| `config.get` / `config.set` | 运行时开关；`config.set` 同时写 settings 持久化（`backfillOnBoot` 等生效即补跑） |
+| `stats.get` | 版本探针、各补丁状态、fork/预热/补行计数与最近记录 |
+| `stats.reset` | 清零计数（保留版本探针与补丁状态） |
+| `config.get` / `config.set` | 运行时开关，`set` 同时写 settings 持久化 |
 
 ```sh
 curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/stats.get
@@ -265,50 +116,40 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
   -H 'Content-Type: application/json' -d '{"key":"backfillOnBoot","value":true}'
 ```
 
-## 开发与测试
+## 已知限制
+
+- **这是被动优化**，削减不了正在使用的 live 事件树（每会话几百 MB 是物理成本）。
+  建议配合 [dsh-fresh-start](https://github.com/orangeofcarl0-sys/dsh-fresh-start)
+  主动控制会话规模：`/fresh` 一键「总结 → 开新会话 → 归档老会话」。
+- `backfillOnBoot` 的解码在插件层同步执行（虽按 `chunkSize` 分片让出），超大文件
+  仍可能短暂冻结事件循环，故默认关闭。
+- `preparedCacheTrim` 在新版 dsh 上自动跳空为 `inactive`（上游已系统代偿）；仅在
+  老版本 dsh 上真正生效。
+- 与其他插件不冲突，但若某个行管理类插件禁用了 `session-projection-cache`，
+  本插件的缓存与预热能力会被削弱。
+
+## 开发
 
 ```sh
-# 一次到位：junction 链接全局 dsh 的嵌套依赖（仓库无 node_modules）
+# 链接全局 dsh 的嵌套依赖（仓库本身无 node_modules）
 powershell -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 
-# 全套 8 套件 142 断言
-#  - verify_compat：对真实安装源码做特征断言 + 门禁实算（宿主 evaluatePluginCompatibility）
-#  - e2e_real_components：直接驱动 dsh 真实实现类（真实 JsonlSessionPersistence
-#    / SessionProjectionRegistry / SessionStore），逐点位验证补丁安装与行为
+# 全套 8 套件 147 断言
 npm test
 ```
 
-仓库布局：
+测试分两层：`verify_compat` 对真实安装源码做特征断言与门禁实算；`e2e_real_components`
+直接驱动 dsh 的真实实现类（`JsonlSessionPersistence` / `SessionProjectionRegistry` /
+`SessionStore`），逐点位验证「补丁装上 → 行为正确」。其余套件覆盖逻辑与边界。
 
-```
-lib/index.js            编排层（apply：配置/统计/日志/版本探针/补丁安装/定时器）
-lib/runtime.js          日志、safeGet、sessionEventsOf、sessionLogOffset、版本探针
-lib/config.js           默认值/下限钳制/settings schema 注册
-lib/stats.js            统计与补丁生命周期状态（active/retired/inactive/off）
-lib/api.js              stats/config HTTP 端点
-lib/warmup.js           分片投影预热 + fork 缓存回填
-lib/backfill.js         磁盘冷会话补行（readRaw / 0.1.3 直读双通道）
-lib/patches/*.js        零拷贝 fork / fast initFor / 冷会话 LRU / 分片 materialize
-tests/run.mjs           测试运行器：每个套件独立子进程（隔离内存，避免累积崩溃）
-tests/                  verify_compat（真实源码特征 + 门禁实算）/ e2e_real_components
-                        （真实实现类端到端）/ smoke_*、test_*（mock 逻辑与边界）
-tools/                  开发者专用脚本（不随 npm 包发布）
-```
+## 更多文档
 
-补丁安装原则：**特征校验先行**（`String(原型方法)` 含特征字面量，不匹配打
-`signature mismatch` 后跳过）；**协议探测**（如 fork 的 `eventState` vs
-`seedSource` 双分支）；**try-catch 兜底**（零拷贝失败自动回退官方实现并计入
-`fallbacks`）。所有补丁 dispose 时按原形状还原（原型方法 delete 回落 / 自有属性
-原样写回）。
-
-## 已知限制
-
-- `backfillOnBoot` 的解码在插件层同步执行（虽按 chunkSize 分片让出），超大文件
-  仍可能短暂冻结事件循环，故默认关闭，需要时手动开启。
-- 0.1.3 上 `preparedCacheTrim` 自动跳空为 `inactive`（上游已系统代偿）；若你仍
-  运行老版本 dsh，该补丁才真正生效。
-- 插件不与 `dsh-perf`（配置订阅类）或 `dsh-pref-kit` 冲突，但行管理类插件禁用
-  `session-projection-cache` 会削弱本插件的缓存/预热功能。
+| 文档 | 内容 |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 三类同步阻塞的定位、各补丁实现原理、加载侧分工、安全性与回退设计 |
+| [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | 版本矩阵、各版本内部形态、dsh 版本门禁规则、插件清单规范 |
+| [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
+| [PUBLISHING.md](PUBLISHING.md) | 发布流程与约定 |
 
 ## License
 

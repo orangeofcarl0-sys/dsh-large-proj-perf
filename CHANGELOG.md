@@ -22,14 +22,19 @@
   `locale/en.json`、`locale/zh.json`（双语标题与描述），并在 `exports` 中暴露
   `./locale/*.json` 与 `./cordis.patch.yml`、在 `files` 中纳入这些资源。
   此前插件在插件管理器中只显示裸包名、无图标。
-- `verify_compat` 新增 2 条断言：bundle 声明完整（`dsh.bundle.patch`）、展示元数据
-  可被宿主 `readPluginMeta` 解析。
+- `verify_compat` 新增 4 条断言：bundle 声明完整（`dsh.bundle.patch`）、双语
+  `locale` 可解析、`exports` 暴露子路径、展示元数据可被宿主 `readPluginMeta` 解析。
 
 ### Changed
 
 - 已知版本列表加入 `0.2.1-rc.2`；支持范围上限更新为 `0.2.1-rc.2`。
-- 新增「插件清单规范」文档章节：`dsh.bundle.patch` 负责加载、`icon` + `locale`
-  负责展示，以及 `exports` 必须显式暴露子路径的原因。
+- **README 重整**：从 315 行精简到 156 行，只保留使用者需要的内容（能力与效果、
+  安装、配置、验证、已知限制）。维护者向内容拆到 `docs/`：
+  - `docs/ARCHITECTURE.md` —— 三类同步阻塞、各补丁实现原理、加载侧分工、
+    identity 契约、安全性与回退、代码结构；
+  - `docs/COMPATIBILITY.md` —— 版本矩阵、0.1.3 破坏面、版本门禁规则、
+    插件清单规范、升级检查清单。
+- `files` 白名单纳入 `docs/`，随 npm 包发布。
 
 ## [1.3.1] — 2026-10-17
 
