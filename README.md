@@ -1,7 +1,7 @@
 # dsh-large-proj-perf
 
-[![Version](https://img.shields.io/badge/version-1.3.0-blue)]()
-[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.2.0--rc.2-green)]()
+[![Version](https://img.shields.io/badge/version-1.3.1-blue)]()
+[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.2.1--rc.1-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、分片投影预热、fork 缓存回填、
@@ -99,8 +99,9 @@ title 前驱提示，**不能作折叠短路**——补行与基线复用会静�
 | 0.1.5-rc.1 | 仅新增已知事件类型（`deliverables/presented`、`subagent/catalog`）；补丁点零变化 |
 | 0.1.5-rc.2 | 相对 rc.1 四个关键包源码零差异（仅版本号），无新增变更 |
 | 0.1.7-rc.2 | 新增 `toolHistory()` 增量折叠（游标只消费新事件）；persistence/format/projection-cache 零差异，补丁点无变化 |
-| 0.2.0-rc.2 | 主版本升级。**插件管理引入严格 peer 门禁**（见下）；`dsh-session` 重构 tail-repair 并新增 `ToolCallRecovery`（`buildForkSeed`/`SESSION_FORMAT_VERSION` 等导出不变）；`llm-deepseek` 拆分为 `-api-key`/`-account`；四个补丁点与 projection-cache 零破坏 |
 | 0.1.7-rc.1 | fork 内部重构：`_forkSeed` → `_forkBoundary` + 模块级 `buildForkSeed`；**open-turn 边界从「拒绝」改为「注入 turn 闭合事件」**；会话格式升 **v4**（cut/文件名语义同 v2/v3）；事件词汇收紧（`tool/result` role=`tool`、新增 `system/message`）。插件已适配（三协议探测） |
+| 0.2.0-rc.2 | 主版本升级。**插件管理引入严格 peer 门禁**（见下）；`dsh-session` 重构 tail-repair 并新增 `ToolCallRecovery`（`buildForkSeed`/`SESSION_FORMAT_VERSION` 等导出不变）；`llm-deepseek` 拆分为 `-api-key`/`-account`；四个补丁点与 projection-cache 零破坏 |
+| 0.2.1-rc.1 | **门禁新增 `engines.dsh` 且独占生效**（声明后 peer 范围被忽略，见下）；jsonl 后端改为 cordis 插件形态（只导出 `name`/`apply`/`Config`，不再导出 `default` 类）；persistence 全面改为 `ctx.effect` 资源生命周期 + 并发 listing 限流（`listConcurrency`）；`dsh-session` 新增插件记录 API（`appendPluginRecord`/`pluginRecordOf`）；投影 `register()` 改为直接返回 effect。**fork 通道与四个补丁点源码零变化**，但预热修了两个真实缺陷（见 1.3.1） |
 
 ### 0.1.3-alpha.2 关键变化（已全部适配）
 
@@ -114,13 +115,13 @@ title 前驱提示，**不能作折叠短路**——补行与基线复用会静�
   事件词汇收紧（`assistant/message` 需 `data.stream`、消息 `id/source/role` 校验）。
 
 升级 dsh 后：启动日志显示 `dsh version: x.y.z (verified)`（版本探针）或列表外
-版本告警；跑 `node tests/verify_compat.mjs`（对真实安装源码做结构断言 + peer 门禁
-离线复算，当前 30 项）；确认无 `signature mismatch` 告警。
+版本告警；跑 `node tests/verify_compat.mjs`（对真实安装源码做结构断言 + 门禁实算，
+当前 31 项）；确认无 `signature mismatch` 告警。
 
 ## 安装
 
-要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.2.0-rc.2`
-（`package.json` 已声明 `engines`）。
+要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.2.1-rc.1`
+（`package.json` 已声明 `engines.dsh`）。
 
 ```sh
 # 从 GitHub 安装（推荐）
@@ -135,7 +136,7 @@ dsh plugin --profile web add file:<本仓库路径>
 > 不自动跟随），或重新 `dsh plugin add`。重启 `dsh web` 生效，日志出现
 > `[dsh-perf] installed (...)` 即成功。
 
-### 插件管理：0.2.0 的 peer 门禁（重要）
+### 插件管理：dsh 版本门禁（重要）
 
 dsh 0.2.0 起，profile bundle 加载前会校验插件 `package.json` 的
 `peerDependencies` 中**所有 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 项**：
@@ -143,9 +144,16 @@ dsh 0.2.0 起，profile bundle 加载前会校验插件 `package.json` 的
 `skipping profile bundle "<name>": ... incompatible with dsh <ver>`），可用
 `dsh plugin allow-version <pkg>@<ver> --profile web` 做精确版本豁免。
 
-本插件的声明（0.2.0 契约的显式兼容声明）：
+**0.2.1 新增 `engines.dsh`，且它独占生效**：只要插件自己的 `package.json`
+声明了 `engines.dsh`，门禁就**只**看它，`peerDependencies` 里的 dsh 项被完全
+忽略（`unmetRequirements()` 的 `if (Object.hasOwn(engines, "dsh"))` 分支直接
+返回）。这是官方推荐的声明位置，也是本插件现在的声明方式：
 
 ```json
+"engines": {
+  "node": ">=22.15.0",
+  "dsh": ">=0.1.0-rc.6 <0.3.0-0"
+},
 "peerDependencies": {
   "@deepseek-ai/cordis": "^4.0.1",
   "@deepseek-ai/dsh": ">=0.1.0-rc.6 <0.3.0-0",
@@ -157,9 +165,11 @@ dsh 0.2.0 起，profile bundle 加载前会校验插件 `package.json` 的
   `SessionLogOffset`）与 `dsh`（版本探针）；
 - 上界 `<0.3.0-0` 覆盖整个 0.1.x–0.2.x 线：既让门禁能替我们守住兼容边界，
   又不会在小版本推进时误杀自己。**升级 dsh 大版本（0.3+）前需先更新此范围**；
-- `verify_compat.mjs` 会用 dsh 自带的 semver **离线复算**同一条门禁规则
-  （`plugin contract: declared dsh peers satisfy runtime version`）——离线报警
-  = 重启后必被跳过。
+- `engines.dsh` 保留 `peerDependencies` 是**为旧版本兜底**：0.2.0 及之前不认
+  `engines.dsh`，只读 peer 范围——两处声明保持一致即可同时满足两代门禁；
+- `verify_compat.mjs` 直接 `import` 宿主真实的 `evaluatePluginCompatibility`
+  实算一遍（`plugin contract: real evaluatePluginCompatibility accepts runtime`），
+  拿不到该导出时回退到 semver 离线复算——报警 = 重启后必被跳过。
 
 ### 大会话内存（推荐启动方式）
 
@@ -226,8 +236,8 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
 # 一次到位：junction 链接全局 dsh 的嵌套依赖（仓库无 node_modules）
 powershell -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 
-# 全套 8 套件 138 断言
-#  - verify_compat：对真实安装源码做特征断言 + peer 门禁离线复算
+# 全套 8 套件 142 断言
+#  - verify_compat：对真实安装源码做特征断言 + 门禁实算（宿主 evaluatePluginCompatibility）
 #  - e2e_real_components：直接驱动 dsh 真实实现类（真实 JsonlSessionPersistence
 #    / SessionProjectionRegistry / SessionStore），逐点位验证补丁安装与行为
 npm test
@@ -245,7 +255,7 @@ lib/warmup.js           分片投影预热 + fork 缓存回填
 lib/backfill.js         磁盘冷会话补行（readRaw / 0.1.3 直读双通道）
 lib/patches/*.js        零拷贝 fork / fast initFor / 冷会话 LRU / 分片 materialize
 tests/run.mjs           测试运行器：每个套件独立子进程（隔离内存，避免累积崩溃）
-tests/                  verify_compat（真实源码特征 + 门禁复算）/ e2e_real_components
+tests/                  verify_compat（真实源码特征 + 门禁实算）/ e2e_real_components
                         （真实实现类端到端）/ smoke_*、test_*（mock 逻辑与边界）
 tools/                  开发者专用脚本（不随 npm 包发布）
 ```

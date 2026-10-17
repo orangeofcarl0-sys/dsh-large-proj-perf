@@ -12,8 +12,15 @@
 // 上游一旦改动就会在这里暴露（mock 会继续「自洽地通过」）。
 
 import { Session, SessionStore, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+// 0.2.1 起 jsonl 后端改为 cordis 插件形态（导出 name/apply/Config），不再导出
+// default 类。真实实例经 Context.plugin 装载后从 ctx.sessionPersistence 取得，
+// 原型链仍是真实的 JsonlSessionPersistence.prototype。
+import { Context } from '@deepseek-ai/cordis'
+import * as jsonlPlugin from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { decodeAllFrames, countFrames } from './zstd_frames.mjs'
 
 let failures = 0
@@ -100,13 +107,36 @@ const makeSession = (id, events) => Session.create(id, events, {
 
 const plugin = await import('../lib/index.js')
 
+// 装载真实 jsonl 后端，返回其 sessionPersistence 实例（真实构造路径）。
+// 0.2.0 及之前该包导出 default 类，可直接 new/原型直取；0.2.1 起只导出
+// cordis 插件（name/apply），必须经 Context.plugin 装载才能拿到实例。
+let backendLoader
+async function loadRealBackend() {
+  if (backendLoader !== undefined) return backendLoader
+  backendLoader = (async () => {
+    if (typeof jsonlPlugin.default === 'function') {
+      const p = Object.create(jsonlPlugin.default.prototype)
+      p.compression = 'zstd'
+      return { instance: p, dispose: () => {} }
+    }
+    const root = mkdtempSync(join(tmpdir(), 'dsh-e2e-'))
+    const ctx = new Context()
+    ctx.plugin({ name: 'e2e-jsonl', apply: (c, cfg) => jsonlPlugin.apply(c, cfg) }, { root, compression: 'zstd' })
+    for (let i = 0; i < 100; i++) {
+      const svc = ctx.get('sessionPersistence')
+      if (svc !== undefined) return { instance: svc, dispose: () => { void ctx.stop?.() } }
+      await tick(20)
+    }
+    throw new Error('real jsonl backend did not register sessionPersistence')
+  })()
+  return backendLoader
+}
+
 // ================= 点位 1：分片 materialize（真实 jsonl 后端） =================
 {
-  const makePersistence = () => {
-    const p = Object.create(JsonlSessionPersistence.prototype) // 真实原型链
-    p.compression = 'zstd'
-    return p
-  }
+  const { instance: realBackend } = await loadRealBackend()
+  const RealProto = Object.getPrototypeOf(realBackend)
+  const makePersistence = () => Object.create(RealProto) // 真实原型链
   const meta = { version: 4, id: 'session-e2e-mat', createdAt: 1, cwd: 'F:\\e2e', isSeeded: false }
   const events = buildEvents(60000) // > materializeChunkEvents(50000)
 
@@ -192,6 +222,73 @@ const plugin = await import('../lib/index.js')
   const session2 = makeSession('session-e2e-cold', buildEvents(N))
   registry2.snapshot(session2)
   check('position 2 control: unwarmed snapshot does cold fold', coldFolds2 === 1, `coldFolds=${coldFolds2}`)
+
+  // 回归 1：预热必须按上游签名 def.init(header, inheritedEventCount) 初始化。
+  // agentPreset / workingDirectory / agentTeam 等真实投影从 header 取值，
+  // 无参调用会抛 TypeError，整个预热静默失败。
+  let initArgs = null
+  const registry3 = Object.create(SessionProjectionRegistry.prototype)
+  registry3.registrations = new Map()
+  registry3.ctx = registry.ctx
+  registry3.register({
+    key: 'headerDependent', stateVersion: 1, stateSchema: { parse: (v) => v },
+    init: (header, cut) => { initArgs = { header, cut }; return header.agentPreset ?? null },
+    apply: (s) => s,
+    wire: { viewSchema: { parse: (v) => v }, view: (s) => s },
+  })
+  const session3 = Session.create('session-e2e-header', buildEvents(N), {
+    version: SESSION_FORMAT_VERSION,
+    id: 'session-e2e-header',
+    createdAt: Date.now(),
+    isSeeded: false,
+    cwd: 'F:\\e2e',
+    agentPreset: 'standard',
+  })
+  const store3 = Object.create(SessionStore.prototype)
+  store3.store = new Map([[session3.id, { session: session3 }]])
+  store3.counter = 0
+  store3.ctx = registry.ctx
+  const warm3 = makeCtx({ sessionProjections: registry3, sessions: store3 })
+  const dispose3 = plugin.apply(warm3.ctx)
+  await emitCreated(warm3.handlers, session3)
+  check('position 2: warmup passes header + inherited cut to init',
+    initArgs !== null && initArgs.header === session3.header
+      && initArgs.cut === session3.inheritedEventCount,
+    initArgs === null ? 'init never called' : `cut=${String(initArgs.cut)}`)
+  check('position 2: header-derived projection state materialized',
+    registry3.registrations.get('headerDependent')?.cells?.get(session3)?.state === 'standard')
+  dispose3()
+
+  // 回归 2：预热写入的 cell 必须与 buildCell 同形（含 views 双槽）。
+  // 缺 views 时，下一条 live 事件经 drive() 会抛
+  // TypeError: Cannot read properties of undefined (reading '1')。
+  const registry4 = Object.create(SessionProjectionRegistry.prototype)
+  registry4.registrations = new Map()
+  registry4.listeners = new Set() // drive() 读 listeners.size
+  registry4.ctx = registry.ctx
+  registry4.register({
+    key: 'counter', stateVersion: 1, stateSchema: { parse: (v) => v },
+    init: () => ({ count: 0 }), apply: (s) => ({ count: s.count + 1 }),
+    wire: { viewSchema: { parse: (v) => v }, view: (s) => s },
+  })
+  const session4 = makeSession('session-e2e-views', buildEvents(N))
+  const store4 = Object.create(SessionStore.prototype)
+  store4.store = new Map([[session4.id, { session: session4 }]])
+  store4.counter = 0
+  store4.ctx = registry.ctx
+  const warm4 = makeCtx({ sessionProjections: registry4, sessions: store4 })
+  const dispose4 = plugin.apply(warm4.ctx)
+  await emitCreated(warm4.handlers, session4)
+  const cell4 = registry4.registrations.get('counter')?.cells?.get(session4)
+  check('position 2: warmed cell carries views pair (buildCell shape)',
+    Array.isArray(cell4?.views) && cell4.views.length === 2)
+  let driveThrew = null
+  try {
+    session4.append('usage', { turn: 1, step: 1, usage: { inputTokens: 1, outputTokens: 1 } })
+    registry4.drive(session4, session4.snapshotEvents().at(-1))
+  } catch (error) { driveThrew = String(error?.message ?? error) }
+  check('position 2: warmed cell advances through real drive()', driveThrew === null, driveThrew ?? '')
+  dispose4()
 }
 
 // ================= 点位 3：零拷贝 fork（真实 SessionStore/Session） =================
@@ -237,7 +334,8 @@ const plugin = await import('../lib/index.js')
 {
   // 真实 jsonl 后端实例上没有 coordinator / preparations（0.1.3 起 API 重写），
   // 两个旧补丁必须走 skipped 分支：日志出现 not found 且实例上不留任何自有属性
-  const persistence = Object.create(JsonlSessionPersistence.prototype)
+  const { instance: realBackend } = await loadRealBackend()
+  const persistence = Object.create(Object.getPrototypeOf(realBackend))
   persistence.compression = 'zstd'
   const { ctx, logs } = makeCtx({ sessionPersistence: persistence })
   const dispose = plugin.apply(ctx)

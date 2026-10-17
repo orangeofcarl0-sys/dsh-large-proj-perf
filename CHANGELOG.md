@@ -9,6 +9,37 @@
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-10-17
+
+面向 **dsh 0.2.1-rc.1** 的兼容与修复版本。
+
+### Added
+
+- **`engines.dsh` 声明**（`>=0.1.0-rc.6 <0.3.0-0`）。0.2.1 起门禁优先读
+  `engines.dsh` 且**独占生效**——声明后 `peerDependencies` 的 dsh 项被完全忽略。
+  两处声明保持一致，同时满足 0.2.0（只认 peer）与 0.2.1+（只认 engines）两代门禁。
+- `verify_compat` 改为直接 `import` 宿主真实的 `evaluatePluginCompatibility` 实算
+  门禁（拿不到时回退 semver 离线复算），并把 `engines.dsh` 纳入断言。
+- e2e 新增 2 组回归断言，锁定本次修复的两个预热缺陷。
+
+### Fixed
+
+- **预热用 `def.init()` 无参调用**（严重）：上游投影契约是
+  `init(header, inheritedEventCount)`，`agentPreset` / `workingDirectory` /
+  `agentTeam` 等真实投影从 header 取值，无参调用抛 `TypeError` 导致该 unit
+  预热静默失败。现按上游 `restore()` 语义传 `(session.header, session.inheritedEventCount)`。
+- **预热写入的 cell 缺 `views` 字段**（严重）：上游 `buildCell()` 产出
+  `{state, observedSeq, views: [undefined, undefined]}`，`drive()` / `advanceCell()`
+  会读写 `views[0]/[1]`。缺该字段时，预热后的会话在**下一条事件到达**时抛
+  `TypeError: Cannot read properties of undefined (reading '1')`。现按 `buildCell` 同形写入。
+
+### Changed
+
+- **测试适配 0.2.1 的 jsonl 后端形态**：该包不再导出 `default` 类，只导出
+  cordis 插件（`name`/`apply`/`Config`）。e2e 改为经真实 `Context.plugin` 装载后
+  从 `ctx.sessionPersistence` 取实例（同时保留 0.2.0 及之前的原型直取路径）。
+- 已知版本列表加入 `0.2.1-rc.1`。
+
 ## [1.3.0] — 2026-10-11
 
 面向 **dsh 0.2.0** 的发布准备版本。
