@@ -32,7 +32,7 @@ const dshRoot = join(dirname(sessionEntry), '..', '..', '..')
 const dshPkg = JSON.parse(readFileSync(join(dshRoot, 'package.json'), 'utf8'))
 
 // 插件开发/验证过的版本；不在列表里打 WARN（结构断言照跑，人工确认兼容性）
-const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2', '0.1.2-alpha.5', '0.1.2-rc.1', '0.1.3-alpha.2', '0.1.5-alpha.1', '0.1.5-rc.1', '0.1.5-rc.2', '0.1.7-rc.1', '0.1.7-rc.2', '0.2.0-rc.2', '0.2.1-rc.1']
+const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2', '0.1.2-alpha.5', '0.1.2-rc.1', '0.1.3-alpha.2', '0.1.5-alpha.1', '0.1.5-rc.1', '0.1.5-rc.2', '0.1.7-rc.1', '0.1.7-rc.2', '0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2']
 console.log(`dsh version: ${dshPkg.version} (root: ${dshRoot})`)
 if (!KNOWN_VERSIONS.includes(dshPkg.version)) {
   warn(`dsh ${dshPkg.version} not in known list ${KNOWN_VERSIONS.join('/')}`, 'verify compatibility manually')
@@ -161,6 +161,32 @@ if (gate !== null && typeof gate.evaluatePluginCompatibility === 'function') {
     check('plugin contract: declared dsh requirement satisfies runtime version', mismatched.length === 0,
       mismatched.length === 0 ? `dsh ${dshPkg.version} within declared range` : `WOULD BE SKIPPED: ${mismatched.map(([n, r]) => `${n}@${r}`).join(', ')}`)
   }
+}
+
+// ---- 插件清单规范：bundle 声明 + 展示元数据 ----
+// 加载侧只认 dsh.bundle.patch；展示侧读 icon 与 <pkg>/locale/{en,zh}.json，
+// 且这些子路径必须在 exports 中显式暴露，否则宿主经 Node 解析读不到。
+const patchDecl = pluginPkg.dsh?.bundle?.patch
+check('plugin manifest: dsh.bundle.patch declared (load path)', typeof patchDecl === 'string' || Array.isArray(patchDecl),
+  Array.isArray(patchDecl) ? patchDecl.join(', ') : String(patchDecl))
+const pluginRoot = new URL('../', import.meta.url)
+const localeFiles = ['locale/en.json', 'locale/zh.json']
+const missingLocale = localeFiles.filter((f) => {
+  try { JSON.parse(readFileSync(new URL(f, pluginRoot), 'utf8')); return false } catch { return true }
+})
+check('plugin manifest: bilingual locale metadata parses', missingLocale.length === 0,
+  missingLocale.length === 0 ? localeFiles.join(', ') : `missing/invalid: ${missingLocale.join(', ')}`)
+check('plugin manifest: exports locale subpath (host resolution)',
+  pluginPkg.exports?.['./locale/*.json'] !== undefined)
+check('plugin manifest: exports cordis.patch.yml subpath',
+  pluginPkg.exports?.['./cordis.patch.yml'] !== undefined)
+if (gate !== null && typeof gate.readPluginMeta === 'function') {
+  const meta = gate.readPluginMeta(pluginPkg.name, pluginRoot.href)
+  check('plugin manifest: host readPluginMeta resolves title/description/icon',
+    meta !== undefined && meta.error === undefined
+      && meta.title?.en !== undefined && meta.description?.zh !== undefined
+      && typeof meta.icon === 'string' && meta.icon.startsWith('data:image/'),
+    meta?.error ?? `title.en=${meta?.title?.en ?? 'MISSING'}`)
 }
 
 console.log(failures === 0 ? (warns > 0 ? `\nALL PASS (${warns} warning(s))` : '\nALL PASS') : `\n${failures} FAIL`)

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "大会话性能优化",
+    "description": "让 fork、冷会话加载与超大会话落盘不再阻塞事件循环：零拷贝 fork、投影分片预热、fork 缓存回填、分片 materialize 与冷会话内存治理。"
+  }
+}

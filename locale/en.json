@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Large Project Performance",
+    "description": "Keeps fork, cold-session loading, and persistence of very large sessions off the event loop: zero-copy fork, chunked projection warmup, fork cache backfill, chunked materialize, and cold-session memory governance."
+  }
+}

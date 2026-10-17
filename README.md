@@ -1,7 +1,7 @@
 # dsh-large-proj-perf
 
-[![Version](https://img.shields.io/badge/version-1.3.1-blue)]()
-[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.2.1--rc.1-green)]()
+[![Version](https://img.shields.io/badge/version-1.3.2-blue)]()
+[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.2.1--rc.2-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DSH（DeepSeek Harness）大会话性能插件：零拷贝 fork、分片投影预热、fork 缓存回填、
@@ -102,6 +102,7 @@ title 前驱提示，**不能作折叠短路**——补行与基线复用会静�
 | 0.1.7-rc.1 | fork 内部重构：`_forkSeed` → `_forkBoundary` + 模块级 `buildForkSeed`；**open-turn 边界从「拒绝」改为「注入 turn 闭合事件」**；会话格式升 **v4**（cut/文件名语义同 v2/v3）；事件词汇收紧（`tool/result` role=`tool`、新增 `system/message`）。插件已适配（三协议探测） |
 | 0.2.0-rc.2 | 主版本升级。**插件管理引入严格 peer 门禁**（见下）；`dsh-session` 重构 tail-repair 并新增 `ToolCallRecovery`（`buildForkSeed`/`SESSION_FORMAT_VERSION` 等导出不变）；`llm-deepseek` 拆分为 `-api-key`/`-account`；四个补丁点与 projection-cache 零破坏 |
 | 0.2.1-rc.1 | **门禁新增 `engines.dsh` 且独占生效**（声明后 peer 范围被忽略，见下）；jsonl 后端改为 cordis 插件形态（只导出 `name`/`apply`/`Config`，不再导出 `default` 类）；persistence 全面改为 `ctx.effect` 资源生命周期 + 并发 listing 限流（`listConcurrency`）；`dsh-session` 新增插件记录 API（`appendPluginRecord`/`pluginRecordOf`）；投影 `register()` 改为直接返回 effect。**fork 通道与四个补丁点源码零变化**，但预热修了两个真实缺陷（见 1.3.1） |
+| 0.2.1-rc.2 | **纯版本刷新**：`dsh-session`、`dsh-session-persistence(-jsonl)`、`dsh-session-projection(-cache)`、`dsh-app-boot`、`dsh-agent-loop`、`dsh-web-app`、`dsh-plugin-manager`、`dsh-host-webserver`、`dsh-home-paths` 等 13 个关键包 rc.1→rc.2 **逐字节相同**。唯一实质变更在 `dsh-web-app/cordis.patch.yml`：新增 UI 条目 `ui-deepseek-model-label-1017`（官方临时模型角标包），不触及任何插件作用点。插件侧仅需登记版本 + 补齐展示元数据 |
 
 ### 0.1.3-alpha.2 关键变化（已全部适配）
 
@@ -120,7 +121,7 @@ title 前驱提示，**不能作折叠短路**——补行与基线复用会静�
 
 ## 安装
 
-要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.2.1-rc.1`
+要求：Node **≥ 22.15.0**（`node:zlib` zstd 接口）；dsh `0.1.0-rc.6` ~ `0.2.1-rc.2`
 （`package.json` 已声明 `engines.dsh`）。
 
 ```sh
@@ -170,6 +171,40 @@ dsh 0.2.0 起，profile bundle 加载前会校验插件 `package.json` 的
 - `verify_compat.mjs` 直接 `import` 宿主真实的 `evaluatePluginCompatibility`
   实算一遍（`plugin contract: real evaluatePluginCompatibility accepts runtime`），
   拿不到该导出时回退到 semver 离线复算——报警 = 重启后必被跳过。
+
+### 插件清单规范：bundle 声明与展示元数据
+
+dsh 从插件 `package.json` 读取两类信息，缺一不可：
+
+| 用途 | 字段 | 说明 |
+|---|---|---|
+| **加载** | `dsh.bundle.patch` | bundle patch 文件路径（或路径数组），profile 加载时按序应用；缺它插件不会被当作 bundle |
+| **展示** | `icon` + `./locale/*.json` | 插件管理器 / 设置页的标题、描述、图标；缺了会退化为裸包名 |
+
+本插件的完整声明：
+
+```json
+"icon": "./icon.svg",
+"exports": {
+  ".": { "default": "./lib/index.js" },
+  "./locale/*.json": "./locale/*.json",
+  "./package.json": "./package.json",
+  "./cordis.patch.yml": "./cordis.patch.yml"
+},
+"files": ["lib", "scripts", "locale/*.json", "icon.svg", "cordis.patch.yml", "README.md", "CHANGELOG.md", "LICENSE"],
+"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+```
+
+`locale/en.json` / `locale/zh.json` 的结构与官方 bundle 一致：
+
+```json
+{ "meta": { "title": "…", "description": "…" } }
+```
+
+注意 `exports` 必须显式暴露 `./locale/*.json` 与 `./cordis.patch.yml`——宿主通过
+`optionalResourcePath("<pkg>/locale/en.json")` 走 Node 解析读取，未导出的子路径读不到。
+图标走 `icon` 字段（相对路径，须在包目录内，≤256 KiB，支持 SVG/PNG/JPEG/WebP），
+也可改用 `exports` 暴露的 `./icon` 资源。
 
 ### 大会话内存（推荐启动方式）
 

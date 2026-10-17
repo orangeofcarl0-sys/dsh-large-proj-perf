@@ -9,6 +9,28 @@
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-10-17
+
+面向 **dsh 0.2.1-rc.2** 的兼容版本。rc.2 是**纯版本刷新**：13 个关键包
+（`dsh-session`、`dsh-session-persistence(-jsonl)`、`dsh-session-projection(-cache)`、
+`dsh-app-boot`、`dsh-agent-loop`、`dsh-web-app`、`dsh-plugin-manager`、
+`dsh-host-webserver`、`dsh-home-paths` 等）rc.1→rc.2 逐字节相同，四个补丁点零影响。
+
+### Added
+
+- **插件清单展示元数据**（按官方 bundle 规范）：`icon.svg`、
+  `locale/en.json`、`locale/zh.json`（双语标题与描述），并在 `exports` 中暴露
+  `./locale/*.json` 与 `./cordis.patch.yml`、在 `files` 中纳入这些资源。
+  此前插件在插件管理器中只显示裸包名、无图标。
+- `verify_compat` 新增 2 条断言：bundle 声明完整（`dsh.bundle.patch`）、展示元数据
+  可被宿主 `readPluginMeta` 解析。
+
+### Changed
+
+- 已知版本列表加入 `0.2.1-rc.2`；支持范围上限更新为 `0.2.1-rc.2`。
+- 新增「插件清单规范」文档章节：`dsh.bundle.patch` 负责加载、`icon` + `locale`
+  负责展示，以及 `exports` 必须显式暴露子路径的原因。
+
 ## [1.3.1] — 2026-10-17
 
 面向 **dsh 0.2.1-rc.1** 的兼容与修复版本。
