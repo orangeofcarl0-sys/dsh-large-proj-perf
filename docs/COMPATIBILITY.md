@@ -20,6 +20,7 @@
 | 0.2.0-rc.2 | 主版本升级。**插件管理引入严格 peer 门禁**；`dsh-session` 重构 tail-repair 并新增 `ToolCallRecovery`（`buildForkSeed`/`SESSION_FORMAT_VERSION` 等导出不变）；`llm-deepseek` 拆分为 `-api-key` / `-account` |
 | 0.2.1-rc.1 | **门禁新增 `engines.dsh` 且独占生效**；jsonl 后端改为 cordis 插件形态（只导出 `name`/`apply`/`Config`）；persistence 改为 `ctx.effect` 资源生命周期 + `listConcurrency` 限流；`dsh-session` 新增 `appendPluginRecord`/`pluginRecordOf`；投影 `register()` 直接返回 effect。**fork 通道与四个补丁点源码零变化** |
 | 0.2.1-rc.2 | **纯版本刷新**：13 个关键包 rc.1→rc.2 逐字节相同。唯一实质变更在 `dsh-web-app/cordis.patch.yml`（新增 `ui-deepseek-model-label-1017` 条目），不触及任何作用点 |
+| 0.2.1-rc.3 | **纯版本刷新**：17 个关键包 rc.2→rc.3 逐字节相同（含 `dsh-session`、三个 persistence/projection 包、`dsh-app-boot`、`dsh-web-app`、`dsh-plugin-manager`、`dsh-session-format-*`、`dsh-working-directory`、`dsh-agent-preset-registry` 等）；依赖集 86 项无增删；305 个已装包全部对齐 rc.3。插件侧仅需登记版本 |
 
 ## 0.1.3-alpha.2 的关键变化
 

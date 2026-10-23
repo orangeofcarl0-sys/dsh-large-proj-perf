@@ -9,6 +9,20 @@
 
 ## [Unreleased]
 
+## [1.3.3] — 2026-10-24
+
+面向 **dsh 0.2.1-rc.3** 的兼容版本。rc.3 是**纯版本刷新**：17 个关键包
+（`dsh-session`、`dsh-session-persistence(-jsonl)`、`dsh-session-projection(-cache)`、
+`dsh-app-boot`、`dsh-web-app`、`dsh-plugin-manager`、`dsh-agent-loop`、`dsh-base`、
+`dsh-host-webserver`、`dsh-home-paths`、`dsh-session-checkpoint-policy`、
+`dsh-session-query`、`dsh-session-format-catalog`、`dsh-session-format-v3-to-v4`、
+`dsh-working-directory`、`dsh-agent-preset-registry`）rc.2→rc.3 逐字节相同；
+顶层依赖集 86 项无增删；305 个已装包全部对齐 rc.3。四个补丁点与投影缓存零影响。
+
+### Changed
+
+- 已知版本列表加入 `0.2.1-rc.3`；支持范围上限更新为 `0.2.1-rc.3`。
+
 ## [1.3.2] — 2026-10-17
 
 面向 **dsh 0.2.1-rc.2** 的兼容版本。rc.2 是**纯版本刷新**：13 个关键包

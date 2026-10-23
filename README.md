@@ -1,7 +1,7 @@
 # dsh-large-proj-perf
 
-[![Version](https://img.shields.io/badge/version-1.3.2-blue)]()
-[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.2.1--rc.2-green)]()
+[![Version](https://img.shields.io/badge/version-1.3.3-blue)]()
+[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.2.1--rc.3-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DSH（DeepSeek Harness）大会话性能插件。消除 fork、历史会话加载、超大会话落盘对
@@ -28,7 +28,7 @@ DSH（DeepSeek Harness）大会话性能插件。消除 fork、历史会话加�
 
 ## 安装
 
-要求 Node **≥ 22.15.0**（`node:zlib` 的 zstd 接口），dsh `0.1.0-rc.6` ~ `0.2.1-rc.2`。
+要求 Node **≥ 22.15.0**（`node:zlib` 的 zstd 接口），dsh `0.1.0-rc.6` ~ `0.2.1-rc.3`。
 
 ```sh
 # 从 GitHub 安装（推荐）
@@ -88,7 +88,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-dsh.ps1
 启动日志会打印探测到的 dsh 版本与各补丁安装结果：
 
 ```
-[dsh-perf] dsh version: 0.2.1-rc.2 (verified)
+[dsh-perf] dsh version: 0.2.1-rc.3 (verified)
 [dsh-perf] zero-copy fork installed (SessionStore.prototype.fork patched, protocol: 0.1.7 forkSeed)
 [dsh-perf] chunked materialize installed (chunk=50000 events/frame, protocol: 0.1.3)
 ```

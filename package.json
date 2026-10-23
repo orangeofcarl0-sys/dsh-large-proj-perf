@@ -1,6 +1,6 @@
 {
   "name": "dsh-large-proj-perf",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "DSH 大会话性能插件：零拷贝 fork + 投影分片预热 + fork 缓存回填 + 分片 materialize + 冷会话内存治理 + heap 检测（DeepSeek Harness / DSH）",
   "type": "module",
   "main": "lib/index.js",
