@@ -170,7 +170,18 @@ async function loadRealBackend() {
 {
   const registry = Object.create(SessionProjectionRegistry.prototype)
   registry.registrations = new Map()
-  registry.ctx = { effect: (gen) => { const it = gen(); const step = (r) => { const { value, done } = it.next(r); if (!done) step(value) }; step() } }
+  registry.listeners = new Set()
+  registry.eventListeners = new Set()
+  // 0.2.2 起 register() 会读 ctx.fiber（assertActive / state）并在
+  // effect 未返回 disposer 时用 noop；两代都兼容的极简 effect。
+  registry.ctx = {
+    effect: (fn) => {
+      const r = typeof fn === 'function' ? fn() : undefined
+      return typeof r === 'function' ? r : () => {}
+    },
+    fiber: { state: 2, assertActive() {} },
+    logger: { warn() {}, error() {} },
+  }
   // 真实 def 形状（stateSchema + wire）
   registry.register({
     key: 'counter',
@@ -265,6 +276,7 @@ async function loadRealBackend() {
   const registry4 = Object.create(SessionProjectionRegistry.prototype)
   registry4.registrations = new Map()
   registry4.listeners = new Set() // drive() 读 listeners.size
+  registry4.eventListeners = new Set() // 0.2.2 起 drive() 还会广播 eventListeners
   registry4.ctx = registry.ctx
   registry4.register({
     key: 'counter', stateVersion: 1, stateSchema: { parse: (v) => v },
@@ -325,8 +337,12 @@ async function loadRealBackend() {
   let frozen = false
   try { patchedEvents[1].data.text = 'MUTATE' } catch { frozen = true }
   check('position 3: shared seed refs stay frozen (true zero-copy)', frozen)
-  check('position 3: child header parity', patchedChild.header.parentSession === 'session-e2e-src'
-    && patchedChild.header.isSeeded === true)
+  // header 必须与同版本原生 fork 一致：0.1.7–0.2.1 原生写 parentSession，
+  // 0.2.2 起不写。断言比对的是「与原生相同」而不是固定值。
+  check('position 3: child header parity',
+    patchedChild.header.isSeeded === true
+      && patchedChild.header.parentSession === nativeChild.header.parentSession,
+    `parentSession=${String(patchedChild.header.parentSession)} native=${String(nativeChild.header.parentSession)}`)
   dispose()
 }
 

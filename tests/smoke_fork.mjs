@@ -93,7 +93,8 @@ const check = (label, cond, extra = '') => {
   const childEvents = child.snapshotEvents()
   // 0.1.3 语义：fork 的 child 额外带一个 inherited end-seed marker（cut==seed 尾部）
   check('native fork works', childEvents.length === srcEvents.length + 1)
-  check('native fork header', child.header.parentSession === 'session-src1' && child.header.isSeeded === true)
+  check('native fork header', child.header.isSeeded === true,
+    `parentSession=${String(child.header.parentSession)}`)
   check('native fork header has no seedLength (alpha.5)', !('seedLength' in child.header))
   // alpha.5 原生 fork 的 meta 只带 cwd/parentSession/isSeeded——不继承 origin
   check('native fork does not inherit origin', !('origin' in child.header))
@@ -106,6 +107,10 @@ const check = (label, cond, extra = '') => {
   const { ctx } = makeCtx(store)
   store.ctx = { ...store.ctx, effect: ctx.effect }
   const src = store.create('session-src2', { seed: seedEvents, meta: { cwd: 'F:\\bench', delegationDepth: 0, agentPreset: 'code', origin: 'subagent' } })
+  // 原生对照：插件安装前先 fork 一次，取同版本原生 header 作为比对基准
+  const nativeChild = store.fork('session-src2')
+  const nativeParentSession = nativeChild.header.parentSession
+  const nativeForkCount = nativeChild.snapshotEvents().length
 
   const plugin = await import('../lib/index.js')
   const dispose = plugin.apply({ ...ctx, sessions: store })
@@ -118,7 +123,8 @@ const check = (label, cond, extra = '') => {
   // 插件注入 inherited marker 后与原生同尺寸（= src + marker）
   check('zero-copy fork works', zeroChildEvents.length === src.snapshotEvents().length + 1,
     `child=${zeroChildEvents.length} src=${src.snapshotEvents().length}`)
-  check('zero-copy fork header parent', child.header.parentSession === 'session-src2')
+  check('zero-copy fork header parent', child.header.parentSession === nativeParentSession,
+    `patched=${String(child.header.parentSession)} native=${String(nativeParentSession)}`)
   check('zero-copy fork header isSeeded', child.header.isSeeded === true)
   check('zero-copy fork header has no seedLength (alpha.5)', !('seedLength' in child.header))
   check('zero-copy fork cwd inherited', child.header.cwd === 'F:\\bench')

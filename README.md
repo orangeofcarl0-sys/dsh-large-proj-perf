@@ -1,7 +1,7 @@
 # dsh-large-proj-perf
 
-[![Version](https://img.shields.io/badge/version-1.3.3-blue)]()
-[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.2.1--rc.3-green)]()
+[![Version](https://img.shields.io/badge/version-1.4.0-blue)]()
+[![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.6..0.2.2--rc.1-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DSH（DeepSeek Harness）大会话性能插件。消除 fork、历史会话加载、超大会话落盘对
@@ -28,7 +28,7 @@ DSH（DeepSeek Harness）大会话性能插件。消除 fork、历史会话加�
 
 ## 安装
 
-要求 Node **≥ 22.15.0**（`node:zlib` 的 zstd 接口），dsh `0.1.0-rc.6` ~ `0.2.1-rc.3`。
+要求 Node **≥ 22.15.0**（`node:zlib` 的 zstd 接口），dsh `0.1.0-rc.6` ~ `0.2.2-rc.1`。
 
 ```sh
 # 从 GitHub 安装（推荐）

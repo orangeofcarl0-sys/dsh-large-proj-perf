@@ -9,6 +9,49 @@
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-11-06
+
+面向 **dsh 0.2.2-rc.1** 的兼容版本。这是 0.2.x 线上的实质变更版本（上一版
+0.2.1-rc.3→rc.4→rc.5 均为纯版本刷新，`dsh-session` 源码零变化）。
+
+### Fixed
+
+- **零拷贝 fork 的 `parentSession` 与原生分歧**：0.2.2 起原生 `fork()` 不再给子会话
+  写 `parentSession`（0.1.7–0.2.1 均写）。插件原本无条件写入，导致同一 dsh 版本内
+  「走零拷贝」与「回退原生」产出的 header 不同，下游按该字段识别分支会话的逻辑
+  时灵时不灵。现按原生源码探测（`nativeSetsParentSession`），两代都与原生一致。
+- **预热对 fork 子会话的缓存回填在 0.2.2 静默失效**：原判断
+  `header.parentSession !== undefined` 在 0.2.2 下恒假。改为
+  `parentSession !== undefined || inheritedEventCount > 0`，覆盖 fork 与 resume
+  两类带继承前缀的会话。
+- **预热遍历已释放的投影单元**：0.2.2 起 `registrations` 保留 `refs === 0` 的 key
+  但不再被 drive/snapshot/restore 读取，预热它们纯属浪费。现跳过这类条目
+  （老版本无该字段，按活跃处理）。
+
+### Changed
+
+- 已知版本列表加入 `0.2.1-rc.4`、`0.2.1-rc.5`、`0.2.2-rc.1`；支持范围上限更新为
+  `0.2.2-rc.1`。
+- 测试适配 0.2.2 的投影 API：`register()` 变异步且读 `ctx.fiber`，
+  `drive()` 会广播 `eventListeners`；e2e 脚手架的 mock ctx 相应补齐。
+- `fork` 相关断言从「写死 `parentSession`」改为「与同版本原生行为一致」，
+  避免上游行为变化时误报。
+
+### Compatibility notes（0.2.2 的三处收紧）
+
+详见 `docs/COMPATIBILITY.md`：
+
+1. **append 生命周期**：store 拥有的 Session 在 `session/created` 派发完成前禁止
+   append；`prepare()` 后处于只读态，`announce()` 成功才解锁。本插件的零拷贝 fork
+   走 `create()`（prepare→enter→announce 同步完成），不受影响。
+2. **`parentSession` 移除**：见上。
+3. **投影读路径重构**：`snapshot()` 不再全量物化，只计算被请求的 key；新增
+   `refs === 0` 语义、`summaryKeys()`、`onEventChanged()`。本插件不调用
+   `register()`，预热写入的 cell 仍被 `snapshot()` 采用（实测零冷折叠）。
+
+另：`dsh-app-boot` 新增 `dsh.bundle.platforms` 平台门禁（可选声明）。本插件为纯
+JS、无平台限定，保持不声明。
+
 ## [1.3.3] — 2026-10-24
 
 面向 **dsh 0.2.1-rc.3** 的兼容版本。rc.3 是**纯版本刷新**：17 个关键包

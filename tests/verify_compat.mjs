@@ -32,7 +32,7 @@ const dshRoot = join(dirname(sessionEntry), '..', '..', '..')
 const dshPkg = JSON.parse(readFileSync(join(dshRoot, 'package.json'), 'utf8'))
 
 // 插件开发/验证过的版本；不在列表里打 WARN（结构断言照跑，人工确认兼容性）
-const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2', '0.1.2-alpha.5', '0.1.2-rc.1', '0.1.3-alpha.2', '0.1.5-alpha.1', '0.1.5-rc.1', '0.1.5-rc.2', '0.1.7-rc.1', '0.1.7-rc.2', '0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3']
+const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2', '0.1.2-alpha.5', '0.1.2-rc.1', '0.1.3-alpha.2', '0.1.5-alpha.1', '0.1.5-rc.1', '0.1.5-rc.2', '0.1.7-rc.1', '0.1.7-rc.2', '0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5', '0.2.2-rc.1']
 console.log(`dsh version: ${dshPkg.version} (root: ${dshRoot})`)
 if (!KNOWN_VERSIONS.includes(dshPkg.version)) {
   warn(`dsh ${dshPkg.version} not in known list ${KNOWN_VERSIONS.join('/')}`, 'verify compatibility manually')
@@ -57,9 +57,16 @@ check('restore channel (eventState shared-frozen -> fromRestore) present',
 check('create(id, options) convenience present (0.1.3 fork path)',
   sessionSrc.includes('create(id, options)') && sessionSrc.includes('this.prepare(id, options)'))
 check('restored header validation present', sessionSrc.includes('validateRestoredSessionHeader'))
-// fork 的 meta 字段集：cwd/parentSession/isSeeded（cut 走 options.inheritedEventCount）
-check('native fork meta field set unchanged',
-  sessionSrc.includes('parentSession: liveSource.id') && sessionSrc.includes('isSeeded: true'))
+// fork 的 meta 字段集：cut 走 options.inheritedEventCount，isSeeded 恒有；
+// parentSession 在 0.1.7–0.2.1 由原生设置、0.2.2 起移除。插件必须按原生行为
+// 对齐（否则同一版本内「走零拷贝」与「回退原生」产出的 header 不同）。
+const nativeSetsParent = sessionSrc.includes('parentSession: liveSource.id')
+check('native fork meta keeps isSeeded', sessionSrc.includes('isSeeded: true'))
+const forkPatchSrc = readFileSync(new URL('../lib/patches/zero-copy-fork.js', import.meta.url), 'utf8')
+check('fork patch aligns parentSession with native behavior',
+  forkPatchSrc.includes('nativeSetsParentSession')
+    && forkPatchSrc.includes("forkSource.includes('parentSession: liveSource.id')"),
+  nativeSetsParent ? `native sets it (dsh ${dshPkg.version})` : `native omits it (dsh ${dshPkg.version}); patch omits too`)
 check('inheritedEventCount option + SessionLogOffset export present',
   sessionSrc.includes('inheritedEventCount') && sessionSrc.includes('SessionLogOffset'))
 // 0.1.3 seed cut 由事件流尾 marker 表达（backfill 推导前提）

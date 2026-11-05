@@ -21,6 +21,78 @@
 | 0.2.1-rc.1 | **门禁新增 `engines.dsh` 且独占生效**；jsonl 后端改为 cordis 插件形态（只导出 `name`/`apply`/`Config`）；persistence 改为 `ctx.effect` 资源生命周期 + `listConcurrency` 限流；`dsh-session` 新增 `appendPluginRecord`/`pluginRecordOf`；投影 `register()` 直接返回 effect。**fork 通道与四个补丁点源码零变化** |
 | 0.2.1-rc.2 | **纯版本刷新**：13 个关键包 rc.1→rc.2 逐字节相同。唯一实质变更在 `dsh-web-app/cordis.patch.yml`（新增 `ui-deepseek-model-label-1017` 条目），不触及任何作用点 |
 | 0.2.1-rc.3 | **纯版本刷新**：17 个关键包 rc.2→rc.3 逐字节相同（含 `dsh-session`、三个 persistence/projection 包、`dsh-app-boot`、`dsh-web-app`、`dsh-plugin-manager`、`dsh-session-format-*`、`dsh-working-directory`、`dsh-agent-preset-registry` 等）；依赖集 86 项无增删；305 个已装包全部对齐 rc.3。插件侧仅需登记版本 |
+| 0.2.1-rc.4 / rc.5 | `dsh-session` 源码零变化（rc.3 起逐字节相同）。插件侧仅需登记版本 |
+| 0.2.2-rc.1 | **破坏性变更（已适配）**，见下节「0.2.2 的三处收紧」 |
+
+## 0.2.2-rc.1 的三处收紧
+
+0.2.2 是 0.2.x 线的实质变更版本，三处都影响了本插件：
+
+### 1. append 生命周期收紧（`dsh-session`）
+
+store 拥有的 Session 在 **`session/created` 派发完成前禁止 append**：
+
+```js
+publicationEntry() {
+  const entry = attachments.get(this)
+  if (entry === null) throw new Error(`session "${this.id}" cannot append outside a SessionStore`)
+  if (entry !== void 0 && entry.announcement !== 'complete')
+    throw new Error(`session "${this.id}" cannot append before session/created completes`)
+  ...
+}
+```
+
+`prepare()` / `create()` 现在会 `attachments.set(session, null)`——未进入 store 的
+store-owned 会话处于「只读」状态；`enter()` 后是 `pending`，`announce()` 成功才
+转 `complete`；`announce()` 抛错则转 `failed` 且不可重试。
+
+**对本插件**：零拷贝 fork 走 `create(childId, {...})`，其内部 `prepare → enter →
+announce` 是同一条同步链路，announce 在 `create` 返回前完成，因此不受影响。
+但任何「先 `prepare`、跨 await 再 `announce`」的写法都会失败。
+
+### 2. 原生 fork 不再写 `parentSession`
+
+```js
+// 0.1.7 – 0.2.1
+meta: { cwd, parentSession: liveSource.id, isSeeded: true }
+// 0.2.2+
+meta: { cwd, isSeeded: true }
+```
+
+字段本身在 header 类型里仍存在，只是原生 fork 不再自动设置。
+
+**对本插件的影响与修复**：
+
+- `lib/patches/zero-copy-fork.js` 原本无条件写 `parentSession`，导致同一版本内
+  「走零拷贝」与「回退原生」产出的 header 不同。现改为按原生源码探测：
+  `nativeSetsParentSession = String(originalFork).includes('parentSession: liveSource.id')`，
+  两代都产出与原生一致的结果。
+- `lib/warmup.js` 原本用 `header.parentSession !== undefined` 判断 fork 子会话以
+  触发缓存回填；0.2.2 下该判断恒假，回填会静默失效。现改为
+  `parentSession !== undefined || inheritedEventCount > 0`，覆盖两代。
+
+### 3. 投影注册与读路径重构（`dsh-session-projection`）
+
+| 变化 | 说明 |
+|---|---|
+| `register()` 变异步 | 返回 thenable + disposer；内部 `acquire()` 走 async，读 `ctx.fiber.assertActive()` |
+| 新增 `refs === 0` 语义 | 最后一个使用者释放后 key 保留在 `registrations` 里但**不参与** drive / snapshot / restore / checkpoint |
+| `snapshot()` 不再全量物化 | 原实现先 `materializeCells(session)` 再读；现在只 `cellFor()` 被请求的 key，Host-only 单元不再被附带折叠 |
+| 新增 `summaryKeys()` / `onEventChanged()` | 客户端摘要 key 集合与事件级变更订阅；`wire.summary !== false` 决定是否进摘要 |
+| `cachedSnapshot()` 标记废弃 | 只返回别处已算过的值，不得用于决策 |
+
+**对本插件**：我们**不调用** `registry.register()`（只用内部 `registrations` /
+`cells` / `buildCell`），所以异步化不影响。预热写入 `registration.cells` 的 cell
+仍被 `snapshot()` 采用（实测零冷折叠），语义有效。但需注意：
+
+- 预热循环应跳过 `registration.refs === 0` 的条目（已释放的单元不再被读取）；
+- `snapshot(session, keys)` 传 keys 时只算所选单元，预热价值集中在「被请求的 key」。
+
+### 4. 新增平台门禁（`dsh-app-boot`）
+
+`dsh.bundle.platforms` 是新增的可选声明（Node 平台名数组）。声明后，运行平台不在
+列表内即抛 `UnsupportedBundlePlatformError` 并跳过该 bundle。本插件未声明——它是
+纯 JS、无平台限定，保持不声明即可在所有平台加载。
 
 ## 0.1.3-alpha.2 的关键变化
 
