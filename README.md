@@ -1,5 +1,7 @@
 # dsh-large-proj-perf
 
+[![npm version](https://img.shields.io/npm/v/dsh-large-proj-perf.svg)](https://www.npmjs.com/package/dsh-large-proj-perf)
+[![dsh](https://img.shields.io/badge/dsh-0.2.2--rc.1-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长会话，消除 fork、
@@ -34,6 +36,9 @@ DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长
 ## 安装
 
 要求 Node **≥ 22.15.0**（需要 `node:zlib` 的 zstd 接口），dsh `0.1.0-rc.6` ~ `0.2.2-rc.1`。
+
+> 上方 `dsh` 徽章标注的是**当前开发基线**（最近一次实测通过的版本），不是支持范围的全部。
+> 实际允许范围见 `package.json` 的 `engines.dsh`。
 
 ```sh
 # 从 npm 安装（推荐）
