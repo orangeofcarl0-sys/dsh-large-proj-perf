@@ -16,7 +16,8 @@
 | `files` | 白名单：`lib`、`scripts`、`docs`、`locale/*.json`、`icon.svg`、`cordis.patch.yml`、`README.md`、`CHANGELOG.md`、`LICENSE` | 避免发布测试与开发产物 |
 | `engines.node` | `>=22.15.0` | 依赖 `node:zlib` 的 zstd 接口 |
 | `engines.dsh` | 与支持的 dsh 区间一致 | dsh 0.2.1+ 的加载门禁只读此项 |
-| `peerDependencies` | 与 `engines.dsh` 保持一致 | 0.2.0 及之前的门禁读此项 |
+| `peerDependencies` | dsh 范围与 `engines.dsh` 一致；`@deepseek-ai/cordis` 用 `~` 锁 minor | 0.2.0 及之前的门禁读 dsh 项；cordis 是宿主单例，官方包统一 `~4.1.0` |
+| `dependencies` | 运行期真实 import 的第三方包（如 `schemastery`） | 漏声明会导致能力静默降级而非报错 |
 | `dsh.bundle.patch` | `./cordis.patch.yml` | dsh 加载插件的必需声明 |
 | `icon` + `locale/*.json` | 双语标题、描述、图标 | 插件管理器的展示元数据 |
 | `scripts.prepublishOnly` | `npm test` | 发布前强制跑全套测试 |

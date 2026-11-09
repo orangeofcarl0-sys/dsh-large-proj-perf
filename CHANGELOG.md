@@ -61,9 +61,24 @@
 
 ### Added
 
+- **补声明 `@deepseek-ai/schemastery` 到 `dependencies`**（`^3.19.0`）。`lib/config.js`
+  顶层 `await import()` 它，此前完全没声明，仅仅搭上了 dsh 嵌套安装的便车。漏声明的
+  后果不是崩溃而是**静默降级**：import 失败被 try-catch 吞掉 → `schemaLib` 为 null →
+  `registerSettings` 直接 return → 配置不再经 settings 持久化，用户改的配置重启即丢。
+- `verify_compat` 新增 2 条断言锁住两个依赖声明（schemastery 在 dependencies、
+  cordis 在 peer 且不在 dependencies）。
+
+### Changed
+
+- **`@deepseek-ai/cordis` 的 peer 范围由 `^4.0.1` 收紧为 `~4.1.0`**，与官方包
+  （`dsh-app-boot` / `dsh-web-app` / `dsh-session-projection` / `dsh-plugin-manager`
+  等）一致。cordis 是宿主提供的单例运行时，`~` 可防止跨 minor 的 API 漂移。
+  实测 `evaluatePluginCompatibility` 在所有已验证 dsh 版本上仍判定 COMPATIBLE
+  （`engines.dsh` 声明后门禁本就忽略 peer 项）。
+
 - `tests/run.mjs` 现在统计并打印**实测断言总数**（汇总表按套件显示，末行给总数）。
   此前 README 写「147 断言」但运行器从不打印该数字，且静态 `check(` 计数为 150。
-  本次实测为 **148**。文档引用断言数时应取自该输出。
+  本次实测为 **150**。文档引用断言数时应取自该输出。
 - `scripts/link-deps.ps1` 移除第三份硬编码的 dsh 版本列表（只到 `0.1.1-rc.2`，
   每次运行都会误报 WARNING）。版本判定统一交给 `tests/verify_compat.mjs`。
 

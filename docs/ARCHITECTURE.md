@@ -223,11 +223,17 @@ tests/                  不随 npm 包发布；见 README「开发」
 tools/                  开发者脚本，不随包发布
 ```
 
-## 已知的清单问题
+## 依赖声明
 
-以下两处 `package.json` 问题已知，但改 manifest 会影响版本门禁行为，因此单独决策：
+两个包容易混淆，按官方惯例区分：
 
-- `@deepseek-ai/cordis` 声明为 `peerDependencies`，但 `lib/` 里没有任何 import，只有
-  `tests/` 用到。严格按「运行时真实依赖」的标准，它不该出现。
-- `lib/config.js` 顶层 `await import('@deepseek-ai/schemastery')`，但该包既不在
-  `dependencies` 也不在 `peerDependencies`，目前依赖 dsh 的嵌套安装找到它。
+| 包 | 声明位置 | 理由 |
+|---|---|---|
+| `@deepseek-ai/cordis` | `peerDependencies`（`~4.1.0`） | 宿主提供的单例运行时。官方 `dsh-app-boot`、`dsh-web-app`、`dsh-session-projection`、`dsh-plugin-manager` 等全部这样声明。`lib/` 不 import 它并不意味着可以省略——它是插件所处的运行时契约 |
+| `@deepseek-ai/schemastery` | `dependencies`（`^3.19.0`） | `lib/config.js` 顶层 `await import()` 的普通运行时依赖。官方 `dsh-plugin-manager` 同样放在 `dependencies` |
+
+`schemastery` 漏声明时的后果不是崩溃，而是**静默降级**：`config.js` 里的
+`try { schemaLib = await import(...) } catch { schemaLib = null }` 会吞掉失败，
+`registerSettings` 见 `schemaLib` 为空就直接 return——配置仍按默认值生效，但不再
+经 settings 持久化。用户改了配置却发现重启后丢失，是最难排查的一类问题。
+`tests/verify_compat.mjs` 有两条断言锁住这两个声明。

@@ -196,5 +196,16 @@ if (gate !== null && typeof gate.readPluginMeta === 'function') {
     meta?.error ?? `title.en=${meta?.title?.en ?? 'MISSING'}`)
 }
 
+// 依赖声明自检：运行期真实 import 的包必须被声明。cordis 是宿主提供的单例，
+// 按官方惯例放 peerDependencies；schemastery 是普通运行时依赖，放 dependencies
+// （参照官方 dsh-plugin-manager）。两者漏声明都会导致「能跑但能力静默降级」。
+check('plugin manifest: declares schemastery (runtime import in config.js)',
+  typeof pluginPkg.dependencies?.['@deepseek-ai/schemastery'] === 'string',
+  pluginPkg.dependencies?.['@deepseek-ai/schemastery'] ?? 'MISSING')
+check('plugin manifest: cordis declared as peer (host singleton)',
+  typeof pluginPkg.peerDependencies?.['@deepseek-ai/cordis'] === 'string'
+    && pluginPkg.dependencies?.['@deepseek-ai/cordis'] === undefined,
+  pluginPkg.peerDependencies?.['@deepseek-ai/cordis'] ?? 'MISSING')
+
 console.log(failures === 0 ? (warns > 0 ? `\nALL PASS (${warns} warning(s))` : '\nALL PASS') : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)
