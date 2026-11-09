@@ -207,5 +207,12 @@ check('plugin manifest: cordis declared as peer (host singleton)',
     && pluginPkg.dependencies?.['@deepseek-ai/cordis'] === undefined,
   pluginPkg.peerDependencies?.['@deepseek-ai/cordis'] ?? 'MISSING')
 
+// config.set 的请求体契约：扁平「键 → 值」对象。若改成 {key,value} 形式或反过来，
+// 调用方会静默失效（接口总是 200），所以用断言把契约钉在代码形状上。
+const apiSrc = readFileSync(new URL('../lib/api.js', import.meta.url), 'utf8')
+check('api contract: config.set accepts a flat key/value body',
+  /for \(const key of Object\.keys\(DEFAULT_CONFIG\)\)/.test(apiSrc)
+    && /if \(key in payload\) setConfigValue\(key, payload\[key\]\)/.test(apiSrc))
+
 console.log(failures === 0 ? (warns > 0 ? `\nALL PASS (${warns} warning(s))` : '\nALL PASS') : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)

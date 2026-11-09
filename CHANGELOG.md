@@ -40,6 +40,11 @@
 
 ### Fixed
 
+- **README 的 `config.set` 示例格式错误**：示例写的是
+  `{"key":"backfillOnBoot","value":true}`，但接口实际按扁平对象逐键匹配
+  （`for (const key of Object.keys(DEFAULT_CONFIG)) if (key in payload) ...`）。
+  照文档发送会得到 200 和当前配置，却一个键都没改——静默失败。已改正示例并补充
+  「扁平对象、不是 key/value 形式」的说明，同时加断言锁住该契约。
 - **`docs/ARCHITECTURE.md` 称历史格式迁移「在 Worker Thread 内完成」——与实现相反。**
   实测 0.2.2-rc.1：`prepareMigration` 在**主线程**调用 `decodeStreamingMigration`，
   Worker 仅用于 `verifyCurrentGenerationInWorker` 校验已发布的世代。同时补充区分
@@ -78,7 +83,7 @@
 
 - `tests/run.mjs` 现在统计并打印**实测断言总数**（汇总表按套件显示，末行给总数）。
   此前 README 写「147 断言」但运行器从不打印该数字，且静态 `check(` 计数为 150。
-  本次实测为 **150**。文档引用断言数时应取自该输出。
+  本次实测为 **151**。文档引用断言数时应取自该输出。
 - `scripts/link-deps.ps1` 移除第三份硬编码的 dsh 版本列表（只到 `0.1.1-rc.2`，
   每次运行都会误报 WARNING）。版本判定统一交给 `tests/verify_compat.mjs`。
 

@@ -130,9 +130,15 @@ node --max-old-space-size=8192 <dsh 入口> web
 
 ```sh
 curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/stats.get
+
+# config.set 提交「键 → 值」扁平对象，可一次改多个键
 curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
-  -H 'Content-Type: application/json' -d '{"key":"backfillOnBoot","value":true}'
+  -H 'Content-Type: application/json' -d '{"backfillOnBoot":true}'
 ```
+
+请求体是扁平对象（如 `{"minEvents":20000,"chunkSize":5000}`），**不是**
+`{"key":...,"value":...}` 形式——后者会被静默忽略：接口仍返回 200 和当前配置，
+但一个键都没改。
 
 ### 常见问题
 
