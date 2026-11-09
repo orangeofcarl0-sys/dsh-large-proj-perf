@@ -22,7 +22,6 @@ param([switch]$Remove)
 
 $ErrorActionPreference = 'Continue'
 $log = '[dsh-link]'
-$KnownDshVersions = @('0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2')   # 插件开发验证过的 dsh 版本
 
 $DshRoot = Join-Path $env:APPDATA 'npm\node_modules\@deepseek-ai\dsh'
 $DshInternal = Join-Path $DshRoot 'node_modules\@deepseek-ai'
@@ -46,13 +45,16 @@ if (-not (Test-Path $DshInternal)) {
   exit 1
 }
 
-# dsh 版本提示（插件与 dsh 内部结构高度耦合，版本漂移时特征校验会跳过补丁）
+# dsh 版本提示（插件与 dsh 内部结构高度耦合，版本漂移时特征校验会跳过补丁）。
+#
+# 这里只打印实际版本，不做「是否验证过」的判定：验证过的版本列表以
+# lib/runtime.js 的 KNOWN_runtime_VERSIONS 为唯一来源，判定权交给
+# `node tests/verify_compat.mjs`（它会拿真实安装源码逐条断言并实算版本门禁）。
+# 不在本脚本里复制/解析该列表——任何副本都会与测试和运行时探针脱节。
 try {
   $dshPkg = Get-Content (Join-Path $DshRoot 'package.json') -Raw | ConvertFrom-Json
   Write-Host "$log dsh version: $($dshPkg.version)"
-  if ($KnownDshVersions -notcontains $dshPkg.version) {
-    Write-Host "$log WARNING: plugin verified on dsh $($KnownDshVersions -join '/'); run tests/verify_compat.mjs on this version"
-  }
+  Write-Host "$log after linking, run: node tests/verify_compat.mjs  (checks this exact dsh version)"
 } catch { }
 
 # 必需包自检

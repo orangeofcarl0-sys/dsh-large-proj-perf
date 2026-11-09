@@ -4,6 +4,9 @@
 // （test_chunked_materialize 反复 zstd 压缩/解压数十 MB 文本）留下的堆碎片与
 // 大对象会累积，最终在 V8 堆上触发偶发崩溃（发布时实测出现过 exit 134）。
 // 每套件一个进程既隔离内存、又让单个套件的崩溃不影响其余套件的结论。
+//
+// 汇总里打印**实测断言数**（统计各套件 stdout 的 PASS/FAIL 行）。文档引用断言
+// 总数时应取自本输出，而不是手写一个数字——手写的会随测试增删漂移。
 
 import { spawnSync } from 'node:child_process'
 import { readdirSync } from 'node:fs'
@@ -33,22 +36,33 @@ if (unknown.length > 0) {
 }
 
 let failed = 0
+let assertions = 0
 const results = []
 for (const suite of suites) {
   const started = Date.now()
-  const r = spawnSync(process.execPath, [join(here, suite)], { stdio: 'inherit' })
+  // 用 pipe 而非 inherit，以便同时转发输出并统计断言行
+  const r = spawnSync(process.execPath, [join(here, suite)], { stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8' })
+  const out = r.stdout ?? ''
+  if (out !== '') process.stdout.write(out)
+  let suiteAssertions = 0
+  for (const line of out.split('\n')) {
+    if (line.startsWith('PASS ') || line.startsWith('FAIL ')) suiteAssertions += 1
+  }
+  assertions += suiteAssertions
   const ms = Date.now() - started
   const ok = r.status === 0
   if (!ok) failed += 1
-  results.push({ suite, ok, ms, status: r.status, signal: r.signal })
+  results.push({ suite, ok, ms, status: r.status, signal: r.signal, assertions: suiteAssertions })
 }
 
 console.log('\n================ 汇总 ================')
 for (const r of results) {
   const mark = r.ok ? 'PASS' : 'FAIL'
-  const detail = r.ok ? `${r.ms}ms` : `exit=${r.status}${r.signal ? ` signal=${r.signal}` : ''}`
+  const detail = r.ok
+    ? `${r.ms}ms  ${r.assertions} 断言`
+    : `exit=${r.status}${r.signal ? ` signal=${r.signal}` : ''}  ${r.assertions} 断言`
   console.log(`${mark}  ${r.suite.padEnd(30)} ${detail}`)
 }
-console.log(`${suites.length - failed}/${suites.length} 套件通过`)
+console.log(`${suites.length - failed}/${suites.length} 套件通过，共 ${assertions} 条断言`)
 
 process.exit(failed === 0 ? 0 : 1)

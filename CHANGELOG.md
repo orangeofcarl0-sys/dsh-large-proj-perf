@@ -1,18 +1,76 @@
 # Changelog
 
 本插件的版本线：**插件版本**（`1.x.y`）与**支持的 dsh 版本区间**各自演进。每个条目
-同时标注该版本验证过的 dsh 版本。
+同时标注该版本实测验证过的 dsh 版本。
 
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与
-[语义化版本](https://semver.org/lang/zh-CN/)；补丁点的上游变化详见 README 的
-「支持版本」表。
+[语义化版本](https://semver.org/lang/zh-CN/)；补丁点的上游变化详见
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) 的版本矩阵。
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-11-09
+
+文档全面重整。不是功能版本，但修正了多处会让读者得出错误结论的文档缺陷。
+
+### Changed
+
+- **README 重写为纯用户向**：是什么 / 安装 / 配置 / 验证与排错 / 已知限制 / 开发 /
+  深入阅读。新增「常见问题」小节，覆盖 `signature mismatch`、门禁跳过、端口不符、
+  配置不生效、插件未加载五种情形。
+- **`PUBLISHING.md` 移入 `docs/`** 并重写：补上前置条件（必须先跑
+  `scripts/link-deps.ps1`，否则 `npm test` 必失败）、git tag 步骤、发布后核验流程；
+  移除机器相关的代理地址与 token 脚本路径。移入 `docs/` 后，README 的链接在已发布
+  的 npm 包里不再失效（原文件被 `.npmignore` 排除，构成发布包内死链）。
+- **配置表补全**：18 个键逐行列出（原先把 `backfillMinBytes` / `backfillMaxBytes`
+  合并成一行），新增「单位」列——`heapWarnBytes`、`backfillMinBytes`、
+  `backfillMaxBytes` 的单位是**字节**，此前未说明。
+- **`docs/ARCHITECTURE.md` 重写**：问题分类统一为 A/B/C/D 四类（原文用「三类」却
+  列了 6 个编号小节）；补上缺失的「装配契约」（`pc` 对象、`ctx.inject` 懒装配、
+  `safeGet`）与「如何新增补丁」两节；`heap 检测` 从「各补丁」中移出，明确它不是补丁、
+  不进 `stats.patches`。
+- **`docs/COMPATIBILITY.md` 重写**：破坏性变更按版本时间序重排（原先 0.2.2 排在
+  0.1.3 之前）；「三处收紧」改为「四处」（原文标题与四个小节不一致）；明确区分
+  `engines.dsh`（允许范围）与 `KNOWN_runtime_VERSIONS`（实测验证过）——这是原文最
+  容易被误读的地方。
+- 移除 README 的 version / dsh 静态徽章：它们与 `package.json` 重复且会在每次发版时
+  漂移。只保留 license 徽章。
+- `locale/en.json` 标题由 `Large Project Performance` 改为
+  `Large Session Performance`；中英文描述均补上原先遗漏的 heap 上限告警能力。
+
+### Fixed
+
+- **`docs/ARCHITECTURE.md` 称历史格式迁移「在 Worker Thread 内完成」——与实现相反。**
+  实测 0.2.2-rc.1：`prepareMigration` 在**主线程**调用 `decodeStreamingMigration`，
+  Worker 仅用于 `verifyCurrentGenerationInWorker` 校验已发布的世代。同时补充区分
+  `ZSTD_DECODE_YIELD_INTERVAL_MS` 与 `MIGRATION_DECODE_YIELD_INTERVAL_MS` 两个
+  各为 500ms 的常量（原文混为一谈）。
+- **`docs/COMPATIBILITY.md` 抄录的 `files` 数组漏了 `docs`**，与 `package.json` 不符。
+  改为「必需字段表 + 指向 `package.json`」，不再复制整份 JSON。
+- **`docs/ARCHITECTURE.md` 的缓存 identity 字段顺序写错**：实际
+  `lifecycleIdentityOf` 是 `formatVersion` 在首位、`cwd` 为条件展开，原文将
+  `formatVersion` 排在末位且未说明条件语义。
+- `docs/COMPATIBILITY.md` 引用的 `optionalResourcePath` 签名补齐为
+  `(specifier, parentURL)`（原文只写了单参数）。
+- CHANGELOG 修正：删除指向不存在的「README 支持版本表」的失效引用（改指
+  `docs/COMPATIBILITY.md`）；1.1.0 与 1.2.0 重复记录同一批功能的问题（LRU / heap
+  保留在 1.2.0）；为 1.0.0 / 1.1.0 / 1.1.1 补日期；统一
+  `### Compatibility notes` 命名。
+- 历史条目中不可复算的包数统计（「13/17 个关键包」「依赖集 86 项」「305 个已装包」）
+  改为定性描述，不再给读者无法核验的精确数字。
+
+### Added
+
+- `tests/run.mjs` 现在统计并打印**实测断言总数**（汇总表按套件显示，末行给总数）。
+  此前 README 写「147 断言」但运行器从不打印该数字，且静态 `check(` 计数为 150。
+  本次实测为 **148**。文档引用断言数时应取自该输出。
+- `scripts/link-deps.ps1` 移除第三份硬编码的 dsh 版本列表（只到 `0.1.1-rc.2`，
+  每次运行都会误报 WARNING）。版本判定统一交给 `tests/verify_compat.mjs`。
+
 ## [1.4.0] — 2026-11-06
 
-面向 **dsh 0.2.2-rc.1** 的兼容版本。这是 0.2.x 线上的实质变更版本（上一版
-0.2.1-rc.3→rc.4→rc.5 均为纯版本刷新，`dsh-session` 源码零变化）。
+面向 **dsh 0.2.2-rc.1** 的兼容版本。这是 0.2.x 线上的实质变更版本（此前
+0.2.1-rc.3 / rc.4 / rc.5 三个 dsh 版本均为纯版本刷新，`dsh-session` 源码零变化）。
 
 ### Fixed
 
@@ -37,7 +95,7 @@
 - `fork` 相关断言从「写死 `parentSession`」改为「与同版本原生行为一致」，
   避免上游行为变化时误报。
 
-### Compatibility notes（0.2.2 的三处收紧）
+### Compatibility notes（0.2.2 的四处收紧）
 
 详见 `docs/COMPATIBILITY.md`：
 
@@ -54,24 +112,21 @@ JS、无平台限定，保持不声明。
 
 ## [1.3.3] — 2026-10-24
 
-面向 **dsh 0.2.1-rc.3** 的兼容版本。rc.3 是**纯版本刷新**：17 个关键包
+面向 **dsh 0.2.1-rc.3** 的兼容版本。rc.3 是**纯版本刷新**：关键包
 （`dsh-session`、`dsh-session-persistence(-jsonl)`、`dsh-session-projection(-cache)`、
-`dsh-app-boot`、`dsh-web-app`、`dsh-plugin-manager`、`dsh-agent-loop`、`dsh-base`、
-`dsh-host-webserver`、`dsh-home-paths`、`dsh-session-checkpoint-policy`、
-`dsh-session-query`、`dsh-session-format-catalog`、`dsh-session-format-v3-to-v4`、
-`dsh-working-directory`、`dsh-agent-preset-registry`）rc.2→rc.3 逐字节相同；
-顶层依赖集 86 项无增删；305 个已装包全部对齐 rc.3。四个补丁点与投影缓存零影响。
+`dsh-app-boot`、`dsh-web-app`、`dsh-plugin-manager` 等）rc.2→rc.3 源码逐字节相同，
+四个补丁点与投影缓存零影响。
 
 ### Changed
 
-- 已知版本列表加入 `0.2.1-rc.3`；支持范围上限更新为 `0.2.1-rc.3`。
+- 已知版本列表加入 `0.2.1-rc.3`；实测验证上限更新为 `0.2.1-rc.3`。
 
 ## [1.3.2] — 2026-10-17
 
-面向 **dsh 0.2.1-rc.2** 的兼容版本。rc.2 是**纯版本刷新**：13 个关键包
+面向 **dsh 0.2.1-rc.2** 的兼容版本。rc.2 是**纯版本刷新**：关键包
 （`dsh-session`、`dsh-session-persistence(-jsonl)`、`dsh-session-projection(-cache)`、
 `dsh-app-boot`、`dsh-agent-loop`、`dsh-web-app`、`dsh-plugin-manager`、
-`dsh-host-webserver`、`dsh-home-paths` 等）rc.1→rc.2 逐字节相同，四个补丁点零影响。
+`dsh-host-webserver`、`dsh-home-paths` 等）rc.1→rc.2 源码逐字节相同，四个补丁点零影响。
 
 ### Added
 
@@ -84,10 +139,10 @@ JS、无平台限定，保持不声明。
 
 ### Changed
 
-- 已知版本列表加入 `0.2.1-rc.2`；支持范围上限更新为 `0.2.1-rc.2`。
-- **README 重整**：从 315 行精简到 156 行，只保留使用者需要的内容（能力与效果、
-  安装、配置、验证、已知限制）。维护者向内容拆到 `docs/`：
-  - `docs/ARCHITECTURE.md` —— 三类同步阻塞、各补丁实现原理、加载侧分工、
+- 已知版本列表加入 `0.2.1-rc.2`；实测验证上限更新为 `0.2.1-rc.2`。
+- **README 重整**：精简为使用者向内容（能力与效果、
+  安装、配置、验证与排错、已知限制）。维护者向内容拆到 `docs/`：
+  - `docs/ARCHITECTURE.md` —— 各补丁实现原理、加载侧分工、
     identity 契约、安全性与回退、代码结构；
   - `docs/COMPATIBILITY.md` —— 版本矩阵、0.1.3 破坏面、版本门禁规则、
     插件清单规范、升级检查清单。
@@ -171,8 +226,8 @@ JS、无平台限定，保持不声明。
 
 - `stats.get` 暴露每个补丁的生命周期状态（`active`/`retired`/`inactive`/`off`），
   实现「上游吸收某项能力后对应补丁自动退役」的可见化。
-- dsh-std Community v0.15 清单与 facet 宿主入口（1.3.0 已移除）。
 - 冷会话 LRU 裁剪（`preparedCacheTrim` / `preparedCacheSize`）与 heap 上限检测。
+- dsh-std Community v0.15 清单与 facet 宿主入口（1.3.0 已移除）。
 
 ### Compatibility
 
@@ -182,22 +237,19 @@ JS、无平台限定，保持不声明。
   `isSeeded`/`inheritedEventCount`（`putSoft` → `put`）。
 - 适配 dsh `0.1.2-rc.1`（补丁点源码零差异）。
 
-## [1.1.1]
+## [1.1.1] — 2026-08
 
 ### Fixed
 
 - 分片 materialize 在 cordis Proxy 环境下从不安装（`ctx.get` 返回的 shadow method
   使签名校验永远失败）；改为取原型方法做特征校验。
 
-## [1.1.0]
+## [1.1.0] — 2026-08
 
-### Added
+> 该版本的变更记录未完整留存；随后 1.2.0 重新记录了本阶段引入的能力
+> （`stats` 生命周期状态、冷会话 LRU 裁剪、heap 检测），以其为准。
 
-- 冷会话 LRU 裁剪：运行时下调 `SessionPreparations.capacity` 并淘汰最旧 ready 条目
-  （官方默认 5 → 1，省约 2.8GB）。
-- heap 上限检测与启动参数引导。
-
-## [1.0.0]
+## [1.0.0] — 2026-08
 
 ### Added
 
