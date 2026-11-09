@@ -1,7 +1,8 @@
 # dsh-large-proj-perf
 
 [![npm version](https://img.shields.io/npm/v/dsh-large-proj-perf.svg)](https://www.npmjs.com/package/dsh-large-proj-perf)
-[![npm downloads](https://img.shields.io/npm/dm/dsh-large-proj-perf.svg)](https://www.npmjs.com/package/dsh-large-proj-perf)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-large-proj-perf.svg?label=npm%20monthly)](https://www.npmjs.com/package/dsh-large-proj-perf)
+[![npm total downloads](https://img.shields.io/npm/d18m/dsh-large-proj-perf.svg?label=npm%20total)](https://www.npmjs.com/package/dsh-large-proj-perf)
 [![dsh](https://img.shields.io/badge/dsh-0.2.2--rc.1-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
