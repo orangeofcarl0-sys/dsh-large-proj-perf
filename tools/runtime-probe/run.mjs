@@ -134,9 +134,22 @@ function renderMarkdown(r) {
   if (f?.ok === true) {
     lines.push('## F 分片落盘', '', row(['chunkedMaterialize', '帧数', '字节', 'fork+encode', 'pinger P99']), row(['---', '---', '---', '---', '---']))
     for (const [label, v] of [['true', f.result.enabled], ['false', f.result.disabled]]) {
-      lines.push(row([label, String(v.fileFrames), String(v.fileBytes), `${v.forkAndEncodeMs} ms`, `${v.pinger.p99} ms`]))
+      lines.push(row([label, String(v.fileFrames), String(v.fileBytes), `${v.forkAndMaterializeMs} ms`, `${v.pinger.p99} ms`]))
     }
     lines.push('')
+  }
+  const g = r.scenarios.G
+  if (g?.ok === true) {
+    const w = g.result.withWriteBack
+    const c = g.result.control
+    lines.push('## G 冷读回写（跨进程验证）', '')
+    lines.push(row(['', '首次冷读', '重启后再读', '加速比', '缓存行已创建', 'coldWriteBacks']), row(['---', '---', '---', '---', '---', '---']))
+    lines.push(row(['**开启**', `${w.coldReadMs} ms`, `${w.restartReadMs} ms`, `**${w.speedup}×**`, String(w.cacheRowCreated), String(w.coldWriteBacks)]))
+    lines.push(row(['对照（关闭）', `${c.coldReadMs} ms`, `${c.restartReadMs} ms`, `${c.speedup}×`, String(c.cacheRowCreated), '—']))
+    lines.push('', `投影 key 数 ${w.projectionKeys}，asOfSeq ${w.asOfSeq}`, '')
+    if (w.coldWriteBackRecent?.length > 0) {
+      lines.push('回写记录：', '', '```', JSON.stringify(w.coldWriteBackRecent, null, 2), '```', '')
+    }
   }
   return lines.join('\n') + '\n'
 }

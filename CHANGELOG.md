@@ -9,6 +9,71 @@
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-11-11
+
+**第三轮优化：一次被自己实测推翻的方案，以及由此得到的正确结论。**
+
+上一轮把冷读 16.6 秒拆成「`session/events` 1.8–2.7s」+「`session/projections`
+16.6s」，据此推定差值是投影折叠，于是设计「冷读后回写缓存行」让折叠只付一次。
+实现完成后做了跨进程实测（场景 G）—— **方案无效**，但也因此第一次定位到真正的
+瓶颈不在投影层。
+
+### 实测结果（场景 G，24 万事件）
+
+| 情形 | 首次读 | 缓存行 |
+|---|---|---|
+| 无缓存行 | 18938 ms | 无 |
+| 有缓存行（新进程） | **19061 ms** | 9.14 MB / 29 units |
+| 有缓存行（同进程二次） | 16913 ms | 同上 |
+
+回写本身完全成功（`coldWriteBacks=1`、identity 逐字段匹配、所有行 `seq` 等于
+日志末尾、`recordFor` 探针显示 HIT），**但对冷读耗时零影响**。
+
+逐项排除后：`stateSchema.parse` 合计 52 ms、`restore` 的折叠循环 0 次迭代。
+16 秒花在「把日志变成内存事件数组」——逐行 `JSON.parse`、关系校验、整图深冻、
+`Session` 构造时的 surface 折叠。这些都在缓存行之前，投影缓存完全帮不到。
+
+### Added
+
+- **`lib/cache-identity.js`**：投影缓存 identity 的唯一构造器。此前 `warmup.js`
+  与 `backfill.js` 各抄一份，字段顺序与条件展开容易与上游 `identityOf()` 漂移，
+  一旦漂移行就永久失配且静默回退全量重折。
+- **`lib/cold-writeback.js`** + `coldWriteBack` 配置键（默认 `false`）：包装
+  `sessionProjectionCache.hydratePrepared`，冷读后把状态写成缓存行。
+  **默认关**——实测无耗时收益，却每次写约 10 MB（`turnOutline` 单占 71%）。
+  保留的唯一理由是让 dsh 的列表读（`cachedSnapshot`，零 I/O）看到更新数据。
+- **`docs/HARNESS-COMPARISON.md`**：Codex CLI / Claude Code / Gemini CLI /
+  ZCode(opencode) / Cursor·Aider·Cline 的会话存储与打开策略对比，附可移植技术
+  清单。核心结论：dsh 缺的是「日志 → 派生索引 → 只读后缀」三层里的中间层。
+- `stats.coldWriteBacks` / `coldWriteBackSkipped` / `coldWriteBackFailed` /
+  `coldWriteBackRecent`。
+- 探测工具新增**场景 G**（四回合跨进程回写验证）。
+
+### Fixed
+
+- **`backfill.js` 的 `def.init()` 无参调用**（严重）：与 1.3.1 修过的 warmup 是
+  同一个 bug——`agentPreset` / `workingDirectory` / `agentTeam` 从 header 取值，
+  无参调用抛 `TypeError` 导致整个补行静默失败。现按上游签名传
+  `(header, inheritedEventCount)`。
+- **`backfill.js` 不跳过 `refs === 0` 的已释放单元**：0.2.2 起这些 key 不再被
+  读取，折叠它们纯属浪费。
+- **`backfill.js` 只补缺失行、陈旧行永不刷新**：原逻辑 `recordFor !== undefined`
+  就 skip，于是会话追加新事件后，旧行永远不更新，读取时仍要从旧水位继续折。
+  现改为「缺失 **或** 行水位落后于日志末尾」才补。
+- **`backfill.js` 同步整文件 zstd 解码**：`zstdDecompressSync` 一次性解压整个
+  文件会冻结事件循环数秒到数十秒（这正是本能力默认关的原因）。改为逐帧异步
+  解压 + 帧间让出，与上游 `readZstdPrefix` 的让出语义对齐。
+- **`backfill.js` 的 seed cut 推导**补上 `meta.seedLength` 回退（老格式 v0）。
+
+### Changed
+
+- **README 能力表删掉「缓存行命中 65 倍」的说法**。那个 0.26 s 是**同进程内会话
+  已 live** 的读（`sessions.get` 快路径），不是跨进程冷读命中缓存行；两者不可
+  混为一谈，此前的表述会让人以为给大会话建一次缓存行就能解决打开慢。
+- `docs/RUNTIME-ANALYSIS.md` 新增场景 G 全节，并在结论摘要里把「冷读 16.6 秒
+  不在投影折叠上」列为第二条核心结论。
+- 配置键 19 → 20。
+
 ## [1.6.0] — 2026-11-11
 
 **首次真实运行时分析。** 此前所有验证都是静态的（源码特征断言 + 真实类 e2e），

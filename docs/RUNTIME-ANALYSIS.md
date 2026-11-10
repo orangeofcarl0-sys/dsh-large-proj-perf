@@ -36,10 +36,14 @@
 **最重要的一条**：**`stats.patches` 说 `active` 不等于「在真实链路上被调用」**。
 零拷贝与预热都是 `active`，但一个从未被 UI 调用、一个每轮都静默跳过。
 
-**第二重要的一条**：**dsh 自带的 `session_projcache` 已经把冷读从 16.6 秒降到
-0.26 秒**（65 倍）。插件的预热与缓存回填是在这个机制之上的补充，而目前两者都
-没有实际生效。这改变了对「这个插件值多少」的整体判断——真正被解决的瓶颈不是
-本插件解决的。
+**第二重要的一条（v1.7 修正）**：**冷读的 16.6 秒不在投影折叠上。**
+v1.6 推测「有投影缓存行就该变快」是**错的**——场景 G 实测：有行 19.06 s、无行
+18.94 s，缓存行命中零加速。16 秒花在「把日志变成内存事件数组」（逐行 JSON.parse +
+关系校验 + 全图深冻 + `Session` 构造时的 surface 折叠），这些**在缓存行之前**，
+投影缓存帮不到。
+
+**第三重要的一条**：上一轮测到的「有缓存行时 0.26 秒」是**同进程内会话已 live**
+的情形（走 `sessions.get` 快路径），不是跨进程冷读命中缓存行。两者不可混为一谈。
 
 ## 一个必须先说明的观测面限制
 
@@ -90,12 +94,12 @@ debugApi 默认 = false
 
 - **冷读投影 16.6–16.8 秒**（24 万事件、29 个投影单元、20 个 wire key）。两次测量
   相差 < 1%，量级稳定可复现。这是插件想优化的那个数字。
-- **缓存行命中后只要 260 ms** —— 相差 65 倍。这说明 `session_projcache` 本身
-  （dsh 自带机制）已经解决了大部分问题；插件的「预热」与「缓存回填」是在
-  这个机制之外的补充，不是主要收益来源。这一点此前没有被准确描述过。
-- pinger 的 P99 是 **1.5–2.3 秒级**：期间事件循环被同步折叠占住，连 `stats.get`
+- **「有缓存行时 260 ms」那一列不是跨进程冷读**：它是同一进程里会话已成为 live
+  session 之后的读（`sessions.get` 命中，`snapshot()` 走既有 cell）。**不要把它
+  当成"缓存行命中"的收益** —— 场景 G 专门测了跨进程命中缓存行，结果是零加速。
+- pinger 的 P99 是 **1.5–2.3 秒级**：期间事件循环被同步工作占住，连 `stats.get`
   这种纯内存读取都要排队。这是「阻塞」的直接外部证据。
-- RSS 增长 400+ MB（冷读）/ 136 MB（缓存命中）：24 万事件的整棵事件树 + 投影
+- RSS 增长 400+ MB（冷读）/ 136 MB（live 会话）：24 万事件的整棵事件树 + 投影
   状态。与 README「每会话数百 MB」的说法一致。
 - `session/events` 也要 1.8-2.7 秒 —— 它同样读全量日志（`observeSession` 先
   `loadSource` 再切页）。所以「打开历史会话」在 0.2.2 上不是「只读一页」。
@@ -268,6 +272,74 @@ await this.ctx.agents.create({
   `RangeError`**，不是吞吐。它在本轮 19 MB 的会话上没有触发量级差异 —— 需要
   数百 MB 级会话才能体现它要解决的问题。
 
+## 场景 G：冷读回写（v1.7，**负面结果**）
+
+### 假设
+
+上一轮把 16.6 秒的冷读拆成「`session/events` 1.8–2.7 s（解码 + surface 折叠）」
+与「`session/projections` 16.6 s」，差值推定为投影折叠。据此假设：**只要把折好的
+状态存成缓存行，下次命中就该接近 0.26 秒**。同时发现 dsh 自己的
+`sessionProjectionCache.coldSnapshot()` 是死代码（全安装包 0 个生产调用点），
+冷读从不回写 —— 于是实现了「冷读后回写」。
+
+### 实测
+
+24 万事件会话，清空 `storages/session_projcache`，`warmupEnabled=false`：
+
+| 情形 | 首次读 | 同进程二次读 | 缓存行 |
+|---|---|---|---|
+| **无缓存行**（回写关） | 18938 ms | — | 无 |
+| **有缓存行**（回写开，新进程） | **19061 ms** | 16913 ms | 9.14 MB / 29 units |
+
+回写本身**完全成功**，可核实：
+
+- `session-probe-long.json` 已落盘，9.14 MB；
+- `stats.coldWriteBacks = 1`，`coldWriteBackRecent = [{ units: 29, events: 240031, ms: 268 }]`；
+- identity 与读取侧逐字段一致（`formatVersion: 4, createdAt, cwd, isSeeded: false,
+  inheritedEventCount: 0`）；
+- 所有行的 `seq = 240031`，正好等于日志末尾，`restore` 的折叠循环因此**一次都不执行**；
+- `recordFor` 探针显示 **HIT**。
+
+### 结论：缓存行命中没有带来任何加速
+
+19.1 s vs 18.9 s，差异在噪声内。这推翻了"折叠是大头"的推定。
+
+### 那 16 秒到底花在哪
+
+逐项排除后的结果：
+
+| 环节 | 实测 | 说明 |
+|---|---|---|
+| `recordFor` 命中判定 | 微秒级 | 同步内存 Map 查询 |
+| 各单元 `stateSchema.parse(row.val)` | **52 ms**（`turnOutline` 33 ms） | 29 个单元合计 |
+| `restore` 的折叠循环 | **0 次迭代** | `startIndex = row.seq + 1 = events.length` |
+| `@deepseek-ai/schemastery` 校验 | 无法单独测（本轮尝试失败） | 见下 |
+
+所以 16 秒既不在这三项里，也不在 `hydratePrepared` 之外的 IO 上（`readFile` 18 MB
+只需几百毫秒）。剩余可能集中在：
+
+1. `SessionLogScanner` 逐行 `JSON.parse` + `assertV4RowAdmission`（24 万行）；
+2. `scanner.finish()` 的 `assertReleasedV4Relationships` + `adoptSessionEvent` +
+   `freezeStoredEvents`（深冻整棵事件图，24 万个对象）；
+3. `Session` 构造时 `SurfaceManager` 对每个 seed 事件调 `validateNext`（O(N) 折叠）。
+
+这三项**都在缓存行之前**——它们不需要投影，纯粹是"把日志变成内存里的事件数组"。
+这也解释了为什么 `session/events`（不做投影）在**刚启动的进程**里也要 1.8–2.7 s，
+而缓存行完全帮不到它。
+
+> 未能定位到上述三项里的具体份额：`schemastery` 的 API 与 zod 不同
+> （`z.number().int` 不存在），本轮没找到等价构造方式来单独计量
+> `wire.viewSchema.parse`。这是本轮的方法缺口，已在"测量方法的边界"里记录。
+
+### 因此该能力默认关闭
+
+`coldWriteBack` 默认 `false`：它没有可测量的耗时收益，却每次冷读写一个约 10 MB
+的记录（`turnOutline` 单占 6.45 MB / 71%）。
+
+保留它的理由只有一条：让 `session_projcache` 的行跟上日志，从而让 dsh 自己的
+**列表读**（`cachedSnapshot`，零 I/O）看到更新的数据 —— 那是另一个问题，与本轮
+要解决的"打开慢"无关。
+
 ## 对插件结论的影响
 
 1. **零拷贝 fork 在 0.2.2 上是死代码。** 要么给 `session/fork` 的
@@ -281,6 +353,15 @@ await this.ctx.agents.create({
 4. **`stats.patches` 的 `active` 不等于生效**。需要额外的「本轮实际命中数」指标
    （`warmed` / `zeroCopy`）才能判断。
 5. **日志不可见**是默认配置下的常态，排错必须依赖 `stats.get`。
+6. **（v1.7）优化目标要重新对准**。16.6 秒在「日志 → 内存事件数组」这一段，
+   不在投影折叠上。任何只优化投影层的手段（缓存回写、预热、断点续跑）都无法
+   改变这个数字。真正相关的是：
+   - 帧索引，只解压需要的区间（但当前没有任何消费者按非零 offset 读）；
+   - 把 `JSON.parse` + 关系校验 + 深冻 + surface 折叠移出主线程；
+   - 或者干脆不在打开时构造完整 `Session`（`turnOutline` 这类索引已经能支撑
+     "只看最近 N 轮"的界面）。
+
+   详见 [HARNESS-COMPARISON.md](HARNESS-COMPARISON.md) 里 Codex CLI 的做法。
 
 ## 测量方法的边界
 
@@ -292,5 +373,11 @@ await this.ctx.agents.create({
   不能当作统计显著的性能结论。
 - RSS 用 `Win32_Process.WorkingSetSize`，含映射文件与未回收页，比 V8 `heapUsed`
   偏大。
+- **场景 G 的归因不完整**：能证明"缓存行命中不加速"，也能量出
+  `stateSchema.parse`（52 ms）与折叠循环（0 次迭代），但**没能**把剩下的约 16 秒
+  进一步拆到 `JSON.parse` / 关系校验 / 深冻 / surface 折叠各自头上。原因是
+  `schemastery` 的 API 与 zod 不同（`z.number().int` 不存在），本轮没构造出
+  等价的 `wire.viewSchema` 来单独计时。再要拆需要换一种打点方式（例如在
+  `SessionLogScanner` 与 `SurfaceManager` 上包一层计时器）。
 - 会话是**合成**的（真实实现类写出的合法 v4 会话，事件类型与信封逐字段对齐），
   内容分布与真实会话不同，压缩比可能偏高或偏低。

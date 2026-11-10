@@ -41,7 +41,9 @@ function countFrames(buf) {
 }
 
 // 在单个实例上跑一段，返回统计快照。
-async function withInstance({ home, agentsHome, profile, port, outDir, configPatch, extraEnv }, fn) {
+// beforeStart 在起进程之前执行（场景 G 用它清空投影缓存，以制造真正的冷读）。
+async function withInstance({ home, agentsHome, profile, port, outDir, configPatch, extraEnv, beforeStart }, fn) {
+  if (typeof beforeStart === 'function') await beforeStart()
   const server = await startDsh({ home, agentsHome, profile, port, outDir, extraEnv })
   const client = makeClient({ origin: server.origin, token: server.token })
   try {
@@ -52,6 +54,28 @@ async function withInstance({ home, agentsHome, profile, port, outDir, configPat
   } finally {
     await server.stop()
   }
+}
+
+// 投影缓存行所在位置（dsh 的 per-record layout）。
+export function projCacheDir(home) {
+  return join(home, 'storages', 'session_projcache', 'sessions')
+}
+
+// 清空投影缓存：制造「该会话从未被 checkpoint 过」的冷读起点。
+export async function clearProjectionCache(home) {
+  const dir = projCacheDir(home)
+  if (!existsSync(dir)) return { cleared: 0, dir }
+  const { rm } = await import('node:fs/promises')
+  const files = readdirSync(dir).filter((f) => f.endsWith('.json'))
+  for (const f of files) await rm(join(dir, f), { force: true })
+  return { cleared: files.length, dir }
+}
+
+// 某会话的缓存行是否已生成（场景 G 的验收点）。
+export function hasCacheRow(home, sessionId) {
+  const dir = projCacheDir(home)
+  if (!existsSync(dir)) return false
+  return readdirSync(dir).some((f) => f === `session-${sessionId}.json` || f === `${sessionId}.json`)
 }
 
 // ---------- 场景 A：装机核验 ----------
@@ -270,8 +294,120 @@ async function materializeRun({ enabled }, opts) {
 export async function scenarioF(opts) {
   return {
     enabled: await materializeRun({ enabled: true }, opts),
-    disabled: await materializeRun({ enabled: false }, opts),
+    // 两轮必须用**不同端口**且严格串行：dsh 不重试也不换端口，前一进程的
+    // 端口未释放会让第二轮 EADDRINUSE 整个启动失败。startDsh 会先探测端口；
+    // 这里给第二轮换一个端口，避免"端口刚释放"的竞态。
+    disabled: await materializeRun({ enabled: false }, { ...opts, port: opts.port + 1 }),
   }
 }
 
-export const SCENARIOS = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF }
+// ---------- 场景 G：冷读回写的跨进程验证（v1.7 的决定性验收） ----------
+//
+// 要证明的事：同一会话「第一次冷读」之后缓存行被创建，**重启进程**再读就走快路径。
+//
+// 三个回合：
+//   G1 清空投影缓存 → 冷读（预期 ~16s，且插件应创建缓存行）
+//   G2 重启进程 → 再读（预期 ~0.3s，走 hydrate 命中）
+//   G3 对照组：清缓存 + coldWriteBack=false → 冷读 → 重启 → 再读（预期仍 ~16s）
+export async function scenarioG(opts) {
+  const LONG_ID = LONG
+  const coldRead = async (client) => {
+    await client.statsReset()
+    const t0 = performance.now()
+    const proj = await client.rpc('session', 'projections', { sessionId: LONG_ID })
+    const ms = performance.now() - t0
+    return { ms: +ms.toFixed(1), keys: Object.keys(proj.value?.values ?? {}).length, asOfSeq: proj.value?.asOfSeq }
+  }
+
+  // --- 回合 1：冷读（回写开启）---
+  const round1 = await withInstance({
+    ...opts,
+    extraEnv: { DSH_PERF_COLD_WRITE_BACK: 'true', DSH_PERF_WARMUP_ENABLED: 'false', DSH_PERF_MIN_EVENTS: '20000' },
+    beforeStart: async () => { await clearProjectionCache(opts.home) },
+  }, async ({ client }) => {
+    const first = await coldRead(client)
+    // 等回写的 setImmediate + put 完成（put 是异步落盘 + fsync）
+    const deadline = Date.now() + 30000
+    let stats = await client.stats()
+    while (Date.now() < deadline && stats.value.coldWriteBacks === 0 && stats.value.coldWriteBackFailed === 0) {
+      await new Promise((r) => setTimeout(r, 200))
+      stats = await client.stats()
+    }
+    return {
+      coldReadMs: first.ms,
+      projectionKeys: first.keys,
+      asOfSeq: first.asOfSeq,
+      coldWriteBacks: stats.value.coldWriteBacks,
+      coldWriteBackSkipped: stats.value.coldWriteBackSkipped,
+      coldWriteBackFailed: stats.value.coldWriteBackFailed,
+      coldWriteBackRecent: stats.value.coldWriteBackRecent,
+      patches: stats.value.patches,
+      cacheRowExists: hasCacheRow(opts.home, LONG_ID),
+    }
+  })
+
+  // --- 回合 2：重启进程，同一会话再读（回写开启，但此时应命中缓存）---
+  const round2 = await withInstance({
+    ...opts,
+    port: opts.port + 1,
+    extraEnv: { DSH_PERF_COLD_WRITE_BACK: 'true', DSH_PERF_WARMUP_ENABLED: 'false', DSH_PERF_MIN_EVENTS: '20000' },
+  }, async ({ client }) => {
+    const second = await coldRead(client)
+    const stats = await client.stats()
+    return {
+      warmReadMs: second.ms,
+      projectionKeys: second.keys,
+      asOfSeq: second.asOfSeq,
+      coldWriteBacks: stats.value.coldWriteBacks,
+      coldWriteBackSkipped: stats.value.coldWriteBackSkipped,
+    }
+  })
+
+  // --- 回合 3：对照组（回写关闭）---
+  const round3 = await withInstance({
+    ...opts,
+    port: opts.port + 2,
+    extraEnv: { DSH_PERF_COLD_WRITE_BACK: 'false', DSH_PERF_WARMUP_ENABLED: 'false', DSH_PERF_MIN_EVENTS: '20000' },
+    beforeStart: async () => { await clearProjectionCache(opts.home) },
+  }, async ({ client }) => {
+    const first = await coldRead(client)
+    const stats = await client.stats()
+    return {
+      coldReadMs: first.ms,
+      coldWriteBacks: stats.value.coldWriteBacks,
+      cacheRowExists: hasCacheRow(opts.home, LONG_ID),
+      patches: stats.value.patches,
+    }
+  })
+  const round4 = await withInstance({
+    ...opts,
+    port: opts.port + 3,
+    extraEnv: { DSH_PERF_COLD_WRITE_BACK: 'false', DSH_PERF_WARMUP_ENABLED: 'false', DSH_PERF_MIN_EVENTS: '20000' },
+  }, async ({ client }) => {
+    const second = await coldRead(client)
+    return { warmReadMs: second.ms }
+  })
+
+  return {
+    withWriteBack: {
+      coldReadMs: round1.coldReadMs,
+      restartReadMs: round2.warmReadMs,
+      speedup: round1.coldReadMs > 0 ? +(round1.coldReadMs / round2.warmReadMs).toFixed(1) : null,
+      cacheRowCreated: round1.cacheRowExists,
+      patches: round1.patches,
+      coldWriteBacks: round1.coldWriteBacks,
+      coldWriteBackRecent: round1.coldWriteBackRecent,
+      projectionKeys: round1.projectionKeys,
+      asOfSeq: round1.asOfSeq,
+    },
+    control: {
+      coldReadMs: round3.coldReadMs,
+      restartReadMs: round4.warmReadMs,
+      speedup: round3.coldReadMs > 0 ? +(round3.coldReadMs / round4.warmReadMs).toFixed(1) : null,
+      cacheRowCreated: round3.cacheRowExists,
+      patches: round3.patches,
+    },
+  }
+}
+
+export const SCENARIOS = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, G: scenarioG }

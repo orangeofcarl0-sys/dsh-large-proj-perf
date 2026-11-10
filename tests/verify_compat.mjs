@@ -232,5 +232,36 @@ const configSrc = readFileSync(new URL('../lib/config.js', import.meta.url), 'ut
 check('config: env override is derived from DEFAULT_CONFIG keys',
   configSrc.includes('DSH_PERF_') && /for \(const key of Object\.keys\(DEFAULT_CONFIG\)\)/.test(configSrc))
 
+// ---- 冷读回写（v1.7）----
+// 依据：dsh 0.2.2 的冷读回写路径 sessionProjectionCache.coldSnapshot() 无任何
+// 生产调用点（全安装包只有定义 + tool-cordis 的 API 目录快照），所以冷读永不
+// 回写、缓存行只能靠 live 的 checkpoint 维护。
+//
+// 但实测证明「有缓存行也不快」（场景 G：19.1s vs 18.9s），所以本能力默认关。
+// 这些断言锁三件事：
+//   1. 挂载点仍然存在（上游改名 → 插件静默 inactive，需要提前知道）；
+//   2. 默认值必须是 false（无收益却写 10MB 的能力不能默认开）；
+//   3. 上游 coldSnapshot 仍无生产调用者（若上游自己接上，本能力应退役）。
+check('cold write-back: hydratePrepared exists on cache (mount point)',
+  cacheSrc.includes('hydratePrepared(session, events)'))
+check('cold write-back: registry.hydrate is what gives us warm cells',
+  projSrc.includes('hydrate(session, checkpoint, events, baseSeq)'))
+check('cold write-back: upstream coldSnapshot still has no production caller',
+  !/\.coldSnapshot\(/.test(src('dsh-session-query')) && !/\.coldSnapshot\(/.test(src('dsh-api-session-controller')),
+  'plugin capability is worth keeping')
+check('cold write-back: defaults to false (measured no speedup, writes ~10MB)',
+  /coldWriteBack:\s*false/.test(configSrc))
+// 共享 identity 构造器：字段顺序与条件展开必须与上游 identityOf 逐字一致，
+// 否则缓存行永久失配（历史上有两份手抄副本漂移的风险）。
+check('cache identity: upstream identityOf shape unchanged',
+  cacheSrc.includes('formatVersion: header.version')
+    && cacheSrc.includes('...header.cwd === void 0 ? {} : { cwd: header.cwd }')
+    && /isSeeded: header\.isSeeded/.test(cacheSrc))
+const identitySrc = readFileSync(new URL('../lib/cache-identity.js', import.meta.url), 'utf8')
+check('cache identity: single shared constructor (no duplicates in lib/)',
+  identitySrc.includes('export function makeCacheIdentity')
+    && !readFileSync(new URL('../lib/warmup.js', import.meta.url), 'utf8').includes('formatVersion: header?.version')
+    && !readFileSync(new URL('../lib/backfill.js', import.meta.url), 'utf8').includes('formatVersion: meta.version'))
+
 console.log(failures === 0 ? (warns > 0 ? `\nALL PASS (${warns} warning(s))` : '\nALL PASS') : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)
