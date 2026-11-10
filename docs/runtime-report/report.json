@@ -1,0 +1,370 @@
+{
+  "startedAt": "2026-11-10T18:30:22.948Z",
+  "home": "<isolated-home>",
+  "profile": "rt",
+  "port": 3199,
+  "scenarios": {
+    "A": {
+      "ok": true,
+      "ms": 16631,
+      "result": {
+        "dshVersion": "0.2.2-rc.1",
+        "patches": {
+          "zeroCopyFork": "active",
+          "warmup": "active",
+          "fastInitFor": "inactive",
+          "preparedCacheTrim": "inactive",
+          "chunkedMaterialize": "active"
+        },
+        "configKeys": 19,
+        "debugApiDefault": false,
+        "perfLogLines": [],
+        "heapLine": null,
+        "installedLine": null,
+        "hasPerfLogs": false,
+        "logs": {
+          "stdout": "dsh web: http://127.0.0.1:3199/?token=<redacted>\n",
+          "stderr": ""
+        }
+      }
+    },
+    "B": {
+      "ok": true,
+      "ms": 22319,
+      "result": {
+        "eventsMs": 2712.8,
+        "projectionsMs": 259.7,
+        "projectionKeyCount": 20,
+        "asOfSeq": 240026,
+        "rssBeforeMB": 490.4375,
+        "rss": {
+          "samples": 3,
+          "minMB": 490.4,
+          "maxMB": 626.9,
+          "deltaMB": 136.4
+        },
+        "pinger": {
+          "n": 9,
+          "failed": 0,
+          "p50": 7.5,
+          "p95": 2293.5,
+          "p99": 2293.5,
+          "max": 2293.5,
+          "stalls": 3
+        },
+        "warmed": 0,
+        "skipped": 0,
+        "warmRecent": [],
+        "patches": {
+          "zeroCopyFork": "active",
+          "warmup": "active",
+          "fastInitFor": "inactive",
+          "preparedCacheTrim": "inactive",
+          "chunkedMaterialize": "active"
+        },
+        "logs": {
+          "stdout": "dsh web: http://127.0.0.1:3199/?token=<redacted>\n",
+          "stderr": ""
+        }
+      }
+    },
+    "C": {
+      "ok": true,
+      "ms": 165915,
+      "result": {
+        "renameOk": true,
+        "renameErr": null,
+        "resumeAndRenameMs": 28018.3,
+        "warmed": 0,
+        "skipped": 0,
+        "aborted": 0,
+        "alreadyHot": 1,
+        "warmRecent": [
+          {
+            "t": 1794335510140,
+            "id": "session-probe-long",
+            "events": 240028,
+            "units": 0,
+            "hotUnits": 29,
+            "baseSeq": -1,
+            "ms": 24653.2677
+          }
+        ],
+        "projectionsAfterMs": 95.6,
+        "projectionKeyCount": 20,
+        "rss": {
+          "samples": 110,
+          "minMB": 409.6,
+          "maxMB": 892.5,
+          "deltaMB": 266.8
+        },
+        "pinger": {
+          "n": 1939,
+          "failed": 1,
+          "p50": 2.7,
+          "p95": 5,
+          "p99": 8.7,
+          "max": 2388.8,
+          "stalls": 5
+        },
+        "patches": {
+          "zeroCopyFork": "active",
+          "warmup": "active",
+          "fastInitFor": "inactive",
+          "preparedCacheTrim": "inactive",
+          "chunkedMaterialize": "active"
+        },
+        "logs": {
+          "stdout": "dsh web: http://127.0.0.1:3199/?token=<redacted>\n",
+          "stderr": ""
+        }
+      }
+    },
+    "D": {
+      "ok": true,
+      "ms": 44818,
+      "result": {
+        "childId": "session-fde7d8c4-07b3-484d-839c-ca9d6d875684",
+        "forkMs": 27283.1,
+        "pluginForks": 0,
+        "pluginZeroCopy": 0,
+        "childFileFrames": 6,
+        "childFileBytes": 19017927,
+        "patches": {
+          "zeroCopyFork": "active",
+          "warmup": "active",
+          "fastInitFor": "inactive",
+          "preparedCacheTrim": "inactive",
+          "chunkedMaterialize": "active"
+        },
+        "logs": {
+          "stdout": "dsh web: http://127.0.0.1:3199/?token=<redacted>\n",
+          "stderr": ""
+        }
+      }
+    },
+    "E": {
+      "ok": true,
+      "ms": 285642,
+      "result": {
+        "liveOk": true,
+        "liveErr": null,
+        "runs": {
+          "native": {
+            "samples": [
+              {
+                "wallMs": 25776.1,
+                "record": {
+                  "t": 1794335743528,
+                  "source": "session-probe-long",
+                  "child": "session-1",
+                  "events": 240032,
+                  "ms": 25325.7474,
+                  "path": "native (disabled)"
+                }
+              },
+              {
+                "wallMs": 26096.3,
+                "record": {
+                  "t": 1794335770101,
+                  "source": "session-probe-long",
+                  "child": "session-2",
+                  "events": 240032,
+                  "ms": 25913.4113,
+                  "path": "native (disabled)"
+                }
+              },
+              {
+                "wallMs": 25408.3,
+                "record": {
+                  "t": 1794335795662,
+                  "source": "session-probe-long",
+                  "child": "session-3",
+                  "events": 240032,
+                  "ms": 25114.7586,
+                  "path": "native (disabled)"
+                }
+              },
+              {
+                "wallMs": 25625.1,
+                "record": {
+                  "t": 1794335821503,
+                  "source": "session-probe-long",
+                  "child": "session-4",
+                  "events": 240032,
+                  "ms": 25391.39439999999,
+                  "path": "native (disabled)"
+                }
+              },
+              {
+                "wallMs": 26371.1,
+                "record": {
+                  "t": 1794335848061,
+                  "source": "session-probe-long",
+                  "child": "session-5",
+                  "events": 240032,
+                  "ms": 26113.98140000002,
+                  "path": "native (disabled)"
+                }
+              }
+            ],
+            "n": 5,
+            "min": 25408.3,
+            "median": 25776.1,
+            "max": 26371.1,
+            "pluginForks": 5,
+            "pluginZeroCopy": 0,
+            "pluginFallbacks": 0,
+            "recordPaths": [
+              "native (disabled)",
+              "native (disabled)",
+              "native (disabled)",
+              "native (disabled)",
+              "native (disabled)"
+            ]
+          },
+          "zeroCopy": {
+            "samples": [
+              {
+                "wallMs": 23780.2,
+                "record": {
+                  "t": 1794335872058,
+                  "source": "session-probe-long",
+                  "child": "session-6",
+                  "events": 240032,
+                  "ms": 23526.0496,
+                  "path": "zero-copy"
+                }
+              },
+              {
+                "wallMs": 27166.7,
+                "record": {
+                  "t": 1794335899418,
+                  "source": "session-probe-long",
+                  "child": "session-7",
+                  "events": 240032,
+                  "ms": 26900.13750000001,
+                  "path": "zero-copy"
+                }
+              },
+              {
+                "wallMs": 21760.3,
+                "record": {
+                  "t": 1794335921410,
+                  "source": "session-probe-long",
+                  "child": "session-8",
+                  "events": 240032,
+                  "ms": 21515.48860000001,
+                  "path": "zero-copy"
+                }
+              },
+              {
+                "wallMs": 21005.5,
+                "record": {
+                  "t": 1794335942638,
+                  "source": "session-probe-long",
+                  "child": "session-9",
+                  "events": 240032,
+                  "ms": 20762.53449999998,
+                  "path": "zero-copy"
+                }
+              },
+              {
+                "wallMs": 20481.7,
+                "record": {
+                  "t": 1794335963334,
+                  "source": "session-probe-long",
+                  "child": "session-10",
+                  "events": 240032,
+                  "ms": 20245.83659999998,
+                  "path": "zero-copy"
+                }
+              }
+            ],
+            "n": 5,
+            "min": 20481.7,
+            "median": 21760.3,
+            "max": 27166.7,
+            "pluginForks": 5,
+            "pluginZeroCopy": 5,
+            "pluginFallbacks": 0,
+            "recordPaths": [
+              "zero-copy",
+              "zero-copy",
+              "zero-copy",
+              "zero-copy",
+              "zero-copy"
+            ]
+          }
+        },
+        "logs": {
+          "stdout": "dsh web: http://127.0.0.1:3199/?token=<redacted>\n",
+          "stderr": ""
+        }
+      }
+    },
+    "F": {
+      "ok": true,
+      "ms": 110798,
+      "result": {
+        "enabled": {
+          "childId": "session-39283b19-3d4b-4702-9536-85ad503dd704",
+          "forkAndMaterializeMs": 35293.5,
+          "fileFrames": 6,
+          "fileBytes": 19017965,
+          "pinger": {
+            "n": 27,
+            "failed": 1,
+            "p50": 3.9,
+            "p95": 4280.1,
+            "p99": 5540.9,
+            "max": 5540.9,
+            "stalls": 4
+          },
+          "pluginForks": 0,
+          "pluginZeroCopy": 0,
+          "patches": {
+            "zeroCopyFork": "active",
+            "warmup": "off",
+            "fastInitFor": "inactive",
+            "preparedCacheTrim": "inactive",
+            "chunkedMaterialize": "active"
+          },
+          "logs": {
+            "stdout": "dsh web: http://127.0.0.1:3199/?token=<redacted>\n",
+            "stderr": ""
+          }
+        },
+        "disabled": {
+          "childId": "session-80114a0c-f02f-4697-8aa4-e57766f1fa28",
+          "forkAndMaterializeMs": 33317.7,
+          "fileFrames": 2,
+          "fileBytes": 19022657,
+          "pinger": {
+            "n": 16,
+            "failed": 1,
+            "p50": 3,
+            "p95": 5358.4,
+            "p99": 5358.4,
+            "max": 5358.4,
+            "stalls": 4
+          },
+          "pluginForks": 0,
+          "pluginZeroCopy": 0,
+          "patches": {
+            "zeroCopyFork": "active",
+            "warmup": "off",
+            "fastInitFor": "inactive",
+            "preparedCacheTrim": "inactive",
+            "chunkedMaterialize": "off"
+          },
+          "logs": {
+            "stdout": "dsh web: http://127.0.0.1:3199/?token=<redacted>\n",
+            "stderr": ""
+          }
+        }
+      }
+    }
+  },
+  "finishedAt": "2026-11-10T18:41:18.169Z"
+}

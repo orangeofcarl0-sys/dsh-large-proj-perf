@@ -214,5 +214,23 @@ check('api contract: config.set accepts a flat key/value body',
   /for \(const key of Object\.keys\(DEFAULT_CONFIG\)\)/.test(apiSrc)
     && /if \(key in payload\) setConfigValue\(key, payload\[key\]\)/.test(apiSrc))
 
+// 运行时观测面契约（见 docs/RUNTIME-ANALYSIS.md）：
+// - debug.fork 必须由 debugApi 把关，默认关闭；
+// - stats 必须有 alreadyHot 计数，否则「上游已建满 cell」会被误读成预热成功；
+// - 预热对已存在的 cell 必须返回 hot 而不是 skip（区分「别人折完」与「无事可做」）。
+const warmupSrc = readFileSync(new URL('../lib/warmup.js', import.meta.url), 'utf8')
+const statsSrc = readFileSync(new URL('../lib/stats.js', import.meta.url), 'utf8')
+check('runtime probe: debug.fork is gated by debugApi',
+  apiSrc.includes("method === 'debug.fork'") && apiSrc.includes('config.debugApi'))
+check('runtime probe: stats counts alreadyHot sessions',
+  statsSrc.includes('alreadyHot: 0') && warmupSrc.includes('stats.alreadyHot += 1'))
+check('runtime probe: warmup labels pre-built cells as hot, not skip',
+  warmupSrc.includes("status: 'hot'") && warmupSrc.includes("outcome.status === 'hot'"))
+
+// config 的环境变量覆盖（离线测量用）：必须由 DEFAULT_CONFIG 键驱动，不另立清单。
+const configSrc = readFileSync(new URL('../lib/config.js', import.meta.url), 'utf8')
+check('config: env override is derived from DEFAULT_CONFIG keys',
+  configSrc.includes('DSH_PERF_') && /for \(const key of Object\.keys\(DEFAULT_CONFIG\)\)/.test(configSrc))
+
 console.log(failures === 0 ? (warns > 0 ? `\nALL PASS (${warns} warning(s))` : '\nALL PASS') : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)

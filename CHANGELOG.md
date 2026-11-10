@@ -9,6 +9,73 @@
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-11-11
+
+**首次真实运行时分析。** 此前所有验证都是静态的（源码特征断言 + 真实类 e2e），
+证明「补丁装得上」，但从未验证「真实 dsh 进程里谁调用它、值多少」。本轮在隔离
+home 里起真实 dsh 0.2.2-rc.1，用 HTTP RPC 驱动真实链路，测出两个此前未知的
+失效，并修正了文档里多处过度宣称。
+
+完整数据、方法与测量边界见新文档 [`docs/RUNTIME-ANALYSIS.md`](docs/RUNTIME-ANALYSIS.md)。
+
+### Added
+
+- **`tools/runtime-probe/`**：隔离实例运行时探测工具集（客户端、起停、RSS 采样、
+  事件循环 pinger、长会话生成器、六个场景、报告渲染）。整目录被 `.npmignore`
+  排除，不随包发布。含 `README.md` 说明复跑方式与已知坑位。
+- **`docs/RUNTIME-ANALYSIS.md`**：六个场景的原始数字、每个数字能证明什么/不能
+  证明什么、失效根因的源码定位。
+- **`debugApi` 配置键**（第 19 个，默认 `false`）：打开后在插件自有 API 前缀下
+  暴露 `debug.fork`，直接调用 `SessionStore.prototype.fork`。这是测量零拷贝补丁
+  的唯一途径——dsh 0.2.2 的常规 fork RPC 已经不经过该方法。
+- **`stats.alreadyHot` 计数**：会话进入时上游已把全部投影折完的次数。此前这种
+  情形会让 `warmed=0` 且 `skipped=0`，看起来像「预热从未被调用」，掩盖了真实原因。
+- **启动期环境变量覆盖配置**（`DSH_PERF_<SNAKE_CASE_KEY>`）：用于离线测量。
+  `chunkedMaterialize` / `fastInitFor` 只在 install 时读一次配置，运行期
+  `config.set` 改不动，只能靠它做独立进程对照。
+- `verify_compat` 新增 5 条断言：`debug.fork` 必须由 `debugApi` 把关、
+  `stats.alreadyHot` 存在、预热对已建 cell 返回 `hot` 而非 `skip`、
+  环境变量覆盖由 `DEFAULT_CONFIG` 键驱动。
+
+### Fixed
+
+- **`stats.patches.active` 的语义被澄清为「已安装」，不再是「已生效」**。README
+  原文写「`active` — 已安装生效」，但实测两项 `active` 的能力从未在真实链路上被
+  调用。文档已改为「已安装（不代表本轮被调用）」，并指出要用 `zeroCopy` /
+  `warmed` / `alreadyHot` 等命中计数判断。
+- **预热对已存在 cell 的状态从 `skip` 改为 `hot`**，并单独计数。原实现把「上游
+  已折完」与「并发 drive 抢建」混为一种 `skip`，无法区分「预热无事可做」与
+  「预热被抢先」。
+
+### Changed
+
+- **README 能力表按运行时实测重写**：效果列改为实测数字（零拷贝 -21%、分片
+  materialize 帧数 2→6 但字节不变、预热失效），并新增一条醒目提示——补丁状态
+  为 `active` 不等于在真实链路上被调用。
+- **README 排错节重写**：新增「看不到任何 `[dsh-perf]` 日志」条目并说明这是默认
+  配置下的常态（正常日志走 `logger.info`，dsh 默认级别会过滤掉；实测隔离实例里
+  该前缀行数为 0 而插件工作正常）。新增「`stats.patches` 显示 `active` 但没效果」
+  条目。原「没有任何日志 = 插件没加载」的说法会误导，已拆分为两条。
+- **README 已知限制**补充两条实测失效说明（UI fork 链路不经过补丁点、预热在
+  0.2.2 上不生效）。
+- **`docs/COMPATIBILITY.md`**：0.2.2 一节由「四处收紧」扩为「五处变更」，新增
+  「`session/fork` RPC 不再经过 `SessionStore.fork`」；第 3 条补上预热失效的
+  运行时证据与根因。
+- **`tools/runtime-probe/scenarios.mjs` 的场景 F 改用真实 `session/fork` RPC**。
+  原设计用 `debug.fork`，但后者只建内存 session 不落盘，测不到 materialize。
+
+### 已知遗留（不在本版本修复）
+
+- **预热在 0.2.2 上仍然不生效**。根因是 `session/created` 的同步广播里
+  `dsh-api-session-controller` 已调 `snapshot()` 建满全部 cell，而它的监听器
+  注册早于本插件。修复需要换挂载点（例如包装 `buildCell` 让折叠过程分片让出），
+  改动面与风险都超出「文档修正 + 观测面」的范围。
+- **零拷贝补丁在 UI fork 链路上仍是死代码**。尝试把补丁改挂到
+  `sessions.prepare({seed})` 覆盖该路径，实测**负收益**：fork 从 25.8s 涨到
+  48.4s（深冻结 24 万事件的开销超过它省下的拷贝）。已回退，改为如实标注。
+- `fastInitFor` / `preparedCacheTrim` 依赖的 `coordinator` 结构在 0.2.2 已不存在，
+  当前恒为 `inactive`。它们是历史兼容层，不是可用能力。
+
 ## [1.5.0] — 2026-11-09
 
 文档全面重整。不是功能版本，但修正了多处会让读者得出错误结论的文档缺陷。

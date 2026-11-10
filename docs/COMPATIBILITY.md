@@ -57,7 +57,7 @@
 对本插件：`preparedCacheTrim` 从此刻起永久 `inactive`（coordinator 已不存在），
 `chunkedMaterialize` 换到新签名分支，`zeroCopyFork` 换到 `eventState` 分支。
 
-## 0.2.2-rc.1：四处收紧
+## 0.2.2-rc.1：五处变更
 
 ### 1. append 生命周期（`dsh-session`）
 
@@ -108,10 +108,18 @@ meta: { cwd, isSeeded: true }
 | 新增 `summaryKeys()` / `onEventChanged()` | 摘要 key 集合、事件级变更订阅；`wire.summary !== false` 决定是否进摘要 |
 | `cachedSnapshot()` 标记废弃 | 只返回别处已算过的值，不得用于决策 |
 
-**对本插件：无破坏，但有一处适配。** 我们不调用 `register()`（只用内部
-`registrations` / `cells` / `buildCell`），异步化不影响。预热写入的 cell 仍被
-`snapshot()` 采用。适配点：预热循环跳过 `refs === 0` 的已释放单元（见
-`lib/warmup.js`）。
+**对本插件：无破坏，但有一处适配；运行时实测该项能力在 0.2.2 上已失效。**
+
+我们不调用 `register()`（只用内部 `registrations` / `cells` / `buildCell`），
+异步化不影响。预热写入的 cell 仍被 `snapshot()` 采用。适配点：预热循环跳过
+`refs === 0` 的已释放单元（见 `lib/warmup.js`）。
+
+**运行时实测（[RUNTIME-ANALYSIS.md](RUNTIME-ANALYSIS.md) 场景 C）**：
+`dsh-api-session-controller` 在 `session/created` 的同步广播里调
+`snapshot(session)`（不带 keys），`cellFor()` 随即对全部 29 个单元执行
+`buildCell()` 一次性折完并写入 `registration.cells`。插件的预热监听器注册更晚，
+轮到它时所有 cell 已存在，逐单元返回 `hot`，`stats.warmed` 恒为 0。这是 0.2.2
+上预热失效的根因，不能靠调整监听器顺序解决（顺序由 bundle 加载次序决定）。
 
 ### 4. 平台门禁（`dsh-app-boot`）
 
@@ -119,6 +127,36 @@ meta: { cwd, isSeeded: true }
 运行平台不在列表内会抛 `UnsupportedBundlePlatformError` 并跳过该 bundle。
 
 **对本插件：不声明。** 本插件是纯 JS、无平台限定，不声明即所有平台均可加载。
+
+### 5. `session/fork` RPC 不再经过 `SessionStore.fork`
+
+`dsh-api-session-controller` 的 `session/fork` 自己构建 seed 后直接调
+`agents.create`（`lib/index.js:775-806`）：
+
+```js
+const seed = buildForkSeed(source.events, boundary);
+await this.ctx.agents.create({
+  sessionId: childId,
+  seed,
+  inheritedEventCount: SessionLogOffset(boundary + 1),
+  meta: { ...source.header.cwd === void 0 ? {} : { cwd: source.header.cwd },
+          isSeeded: true, ... },
+  ...
+});
+```
+
+全安装包内服务端已无任何 `sessions.fork(` 调用方（只有浏览器端
+`dsh-client-ui-chat` / `dsh-client-ui-workspace` 的 client.js 里有同名前端方法）。
+
+**对本插件：零拷贝 fork 补丁在 UI 链路上失效。** 补丁挂在
+`SessionStore.prototype.fork` 上，而这条 RPC 不调用它。运行时实测
+（[RUNTIME-ANALYSIS.md](RUNTIME-ANALYSIS.md) 场景 D）：真实 fork 后
+`stats.forks = 0`。补丁本身仍可工作（场景 E 用 `debug.fork` 直测：24 万事件
+20.1s → 15.8s），但没有真实调用方。
+
+注意：把补丁改挂到 `sessions.prepare({seed})` 覆盖这条路径**是负收益**——实测
+会让 fork 从 25.8s 涨到 48.4s（深冻结 24 万事件的开销超过它省下的拷贝）。
+因此当前版本选择保持补丁原状并如实标注，而非扩展覆盖。
 
 ## 插件清单规范
 
