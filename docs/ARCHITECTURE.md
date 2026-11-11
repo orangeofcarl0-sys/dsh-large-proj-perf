@@ -78,31 +78,21 @@ const pc = {
   `path: 'native-fallback'`（计入 `stats.fallbacks`）。服务缺失时直接跳过，状态
   `inactive`。
 
-### 2. 分片投影预热（问题 B）
+### 2. 分片投影预热 —— **v1.10.0 已移除**
 
-- **patch 什么**：不 patch 方法，而是订阅 `session/created`，在事件数超过 `minEvents`
-  时主动把投影单元折出来写进 `registry.registrations.get(key).cells`。
-- **为什么能省**：上游的 `cellFor()` 在 cell 缺失时同步折叠整个日志。预热抢在第一次
-  读取之前把 cell 建好并分片让出事件循环，后续 `snapshot()` / `drive()` 直接命中。
-- **探测条件**：`ctx.sessionProjections` 存在且暴露 `cellFor` / `buildCell` /
-  `registrations`。缺任何一个即 `inactive` 并打日志。
-- **cell 形状必须与上游 `buildCell` 一致**：
+该能力在 dsh 0.2.2 上恒 `alreadyHot`：`dsh-api-session-controller` 在
+`session/created` 的同步广播里就调 `snapshot()` → `cellFor()` → `buildCell()`
+把全部投影 cell 建满了，插件的监听器注册更晚，轮到它时没有可折的单元。
 
-  ```js
-  { state, observedSeq, views: [undefined, undefined] }
-  ```
+完整实测与根因见 [RUNTIME-ANALYSIS.md](RUNTIME-ANALYSIS.md) 场景 C。保留这一节
+是为了让后来者知道「这里曾经有过什么、为什么去掉」，避免重复投入。
 
-  且初始化必须调用 `def.init(header, inheritedEventCount)`。这两点都是硬性要求：
-  缺 `views` 会让下一条事件经 `drive()` 时抛 `TypeError`；无参调用 `init()` 会让所有
-  从 header 取值的投影（`agentPreset`、`workingDirectory`、`agentTeam` 等）抛错。
-  两者都有回归断言守护。
-- **0.2.2 起**：`registrations` 会保留已释放（`refs === 0`）的 key，这类单元不再被
-  drive / snapshot / restore 读取，预热时会跳过。
-- **缓存基线**：有投影缓存行时以它为起点跳过已折叠前缀。identity 键必须与上游
-  `identityOf` 完全一致（见下）。
-- **fork 缓存回填**：预热完成后，如果会话带继承前缀（`parentSession` 存在，或
-  `inheritedEventCount > 0`），立即回填投影缓存行——否则该子会话被放弃后永远没有
-  缓存行，下次打开会走全量读。
+它留下的两个硬性知识仍然有效，任何「自己折投影」的实现都必须遵守：
+
+- **cell 形状必须与上游 `buildCell` 一致**：`{ state, observedSeq, views: [undefined, undefined] }`。
+  缺 `views` 会让下一条事件经 `drive()` 时抛 `TypeError`。
+- **初始化必须调用 `def.init(header, inheritedEventCount)`**。无参调用会让所有从
+  header 取值的投影（`agentPreset`、`workingDirectory`、`agentTeam` 等）抛错。
 
 ### 3. 分片 materialize（问题 C）
 
@@ -146,17 +136,20 @@ heap 上限检查写在 `lib/index.js` 里，不 patch 任何方法，也不进 
 
 ## 加载侧：上游已做的与插件补的
 
-长会话「打开」的成本分四段。前两段上游已自行优化，插件不介入：
+长会话「打开」的成本分四段：
 
 | 阶段 | 上游现状（0.2.2-rc.1） | 插件是否介入 |
 |---|---|---|
-| 磁盘解码 | 增量扫描 + 逐帧 zstd 解码，按 `ZSTD_DECODE_YIELD_INTERVAL_MS`（500ms）让出 | 否 |
+| 磁盘解码 | 增量扫描 + 逐帧 zstd 解码，按 `ZSTD_DECODE_YIELD_INTERVAL_MS`（500ms）让出 | 否（实测只占 1.65 s） |
 | 历史格式迁移 | **主线程** `decodeStreamingMigration`，按 `MIGRATION_DECODE_YIELD_INTERVAL_MS`（500ms）让出；Worker 仅用于 `verifyCurrentGenerationInWorker` **校验**已发布的世代 | 否 |
-| 投影折叠 | `cellFor` 冷时同步全量 `buildCell` | **是**：分片预热 + 缓存基线 |
+| 投影折叠 | `cellFor` 冷时同步全量 `buildCell`；`turnOutline` 的 `apply` 是 O(n²) | **是**：`fastTurnOutline` 把它换成 O(n)，冷读 21.2 s → 3.0 s |
 | 落盘编码 | `encodeMaterialization` 单 body 帧 | **是**：分片 zstd 多帧 |
 
 注意迁移是主线程完成的，两个 yield 常量也各不相同——不要把「Worker」和「迁移」关联
 起来。
+
+投影折叠的实测归因见 [RUNTIME-ANALYSIS.md](RUNTIME-ANALYSIS.md) 场景 H：
+29 个单元里 `turnOutline` 一个占 96%，其余 28 个合计 0.67 s。
 
 ### 投影缓存行的 identity 契约
 
@@ -176,8 +169,9 @@ heap 上限检查写在 `lib/index.js` 里，不 patch 任何方法，也不进 
 ```
 
 两个易错点：`formatVersion` 缺失或不等时上游**不会**把它当折叠短路（只能当 title
-前驱提示）；`cwd` 是全有或全无，不能写成 `cwd: undefined`。`lib/warmup.js` 与
-`lib/backfill.js` 都按此构造，并有回归断言。
+前驱提示）；`cwd` 是全有或全无，不能写成 `cwd: undefined`。`lib/cache-identity.js`
+是唯一构造器（v1.10.0 起），`backfill.js` 与 `cold-writeback.js` 都用它，并有回归
+断言。
 
 ## 安全性与回退
 
@@ -191,34 +185,62 @@ heap 上限检查写在 `lib/index.js` 里，不 patch 任何方法，也不进 
    `signature mismatch`，状态置 `inactive`；
 3. **运行时兜底**——零拷贝 fork 抛错时回退原生实现，计入 `stats.fallbacks`。
 
-所有补丁都在 dispose 时还原。注意还原方式并不完全统一：`chunked-materialize`
-区分「自有属性」与「原型方法」两种情形分别还原，`fast-init-for` 则是直接
-`delete coordinator.initFor`（不保留原值）。新增补丁时请按前者的写法。
+所有补丁都在 dispose 时还原。**还原语义已统一到 `lib/patch-target.js` 的
+`wrapMethod`**（v1.10.0）：原始方法来自原型 → `delete` 自有属性让方法回落原型；
+原始方法是自有属性（测试 mock / 自定义后端）→ 写回原函数。此前三处各写一遍且
+`fast-init-for` 直接 `delete` 不保留原值，是这套样板漂移的证据。
+
+## 装配契约：`deps` 与 `runtime`
+
+v1.10.0 起，模块不再共用一个 `pc` 对象，而是分两级（见 `lib/context.js`）：
+
+| 对象 | 何时就绪 | 谁能用 | 用途 |
+|---|---|---|---|
+| `deps` | 构造时全部就绪，**冻结** | 所有模块 | 服务、配置、日志、工具函数 |
+| `runtime` | 运行期逐步登记 | **只有 `api.js`** | 晚绑定槽（目前只有 `backfill`） |
+
+**为什么必须分开**：`api.js` 原先在 `installApi` 时解构 `backfill` 与
+`retrimPreparedCache`，但这两个值是别的模块在装配**之后**写的。`installApi` 走
+`ctx.inject(['webServer'])` 懒装配（webServer 早于 sessionPersistence 就绪），
+解构到的是 `undefined` 且永不更新——导致「打开 `backfillOnBoot` 不补跑扫描」
+这个真实 bug。现在 `api.js` 通过 `runtime.backfill.get()` **在每次请求时**取值。
+
+**新增模块时**：只拿 `deps`。如果确实需要晚绑定的东西，说明它依赖了运行期才出现的
+状态，应把该状态登记进 `runtime` 并在**使用时**取值，绝不在装配时解构。
 
 ## 如何新增一个补丁
 
-1. 在 `lib/patches/` 建模块，导出 `install(pc, ictx?)`。
-2. 开头读 `config.<你的开关>`，关闭时 `setPatchStatus(key, 'off')` 后 return。
-3. 取服务用 `pc.safeGet(actx, name)`，不要直接 `actx.get`。
-4. 取原型方法做特征校验用 `Object.getPrototypeOf(obj)?.method`；cordis 的 Proxy 会把
-   实例方法包成 `[native code]`，字符串校验会永远失败。
-5. 每一条「跳过」分支都要 `setPatchStatus(key, 'inactive')` 并打日志说明原因——静默
+1. 在 `lib/patches/` 建模块，导出 `install(deps)`。
+2. 开头读 `deps.config.<你的开关>`，关闭时 `setPatchStatus(key, 'off')` 后 return。
+3. 取服务用 `deps.safeGet(deps.ctx, name)`，不要直接 `ctx.get`（对缺失服务可能抛错）。
+4. 需要替换方法时用 `lib/patch-target.js` 的 `wrapMethod(target, name, factory, disposers)`，
+   不要手写「判断自身属性 + 替换 + 还原」那套。
+5. 特征校验用同文件的 `sourceOf(target, name)`；cordis 的 Proxy 会把实例方法包成
+   `[native code]`，直接 `String(instance.method)` 会永远失败。
+6. 每一条「跳过」分支都要 `setPatchStatus(key, 'inactive')` 并打日志说明原因——静默
    跳过是最难排查的故障。
-6. 把还原动作 push 进 `pc.disposers`。
-7. 在 `lib/config.js` 加开关与默认值，在 `tests/verify_compat.mjs` 加对应的宿主特征
-   断言，在 `tests/e2e_real_components.mjs` 加行为断言。
+7. 在 `lib/config.js` 加开关与默认值（数值项同时进 `CONFIG_MIN`），
+   在 `tests/verify_compat.mjs` 加宿主特征断言，在
+   `tests/e2e_real_components.mjs` 加行为断言。
 
 ## 代码结构
 
 ```
-lib/index.js            编排层：配置/统计/日志/版本探针/补丁安装/定时器/装配契约
-lib/runtime.js          日志、safeGet、sessionEventsOf、sessionLogOffset、版本探针
-lib/config.js           默认值、下限钳制、settings schema 注册
+lib/index.js            编排层：版本探针/补丁装配/定时器/生命周期
+lib/context.js          装配契约：deps（冻结、只读）与 runtime（晚绑定槽）
+lib/runtime.js          dsh 兼容垫片：日志、safeGet、sessionEventsOf、版本探针
+lib/config.js           默认值、下限钳制、settings schema 注册、环境变量覆盖
+lib/constants.js        跨模块共享的具名常量（延迟、上限、字节估算）
+lib/yield.js            分片遍历之间的让出原语
 lib/stats.js            统计与补丁生命周期状态
 lib/api.js              stats/config HTTP 端点（回环 + 同源校验）
-lib/warmup.js           分片投影预热 + fork 缓存回填
-lib/backfill.js         磁盘冷会话补行（readRaw 优先，缺失时直读文件）
-lib/patches/*.js        四个补丁
+lib/cache-identity.js   投影缓存行 identity 的唯一构造器
+lib/backfill.js         磁盘冷会话补行（逐帧异步解码 + 分片折叠，默认关）
+lib/cold-writeback.js   冷读后回写投影缓存行（默认关）
+lib/fast-turn-outline.js  把 turnOutline 的 O(n²) fold 换成 O(n)
+lib/memory-budget.js    事件缓存按字节限容
+lib/patch-target.js     方法替换样板：resolveMethod / wrapMethod / sourceOf
+lib/patches/*.js        两个补丁（零拷贝 fork、分片 materialize）
 tests/                  不随 npm 包发布；见 README「开发」
 tools/                  开发者脚本，不随包发布
 ```

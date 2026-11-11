@@ -9,6 +9,93 @@
 
 ## [Unreleased]
 
+## [1.10.0] — 2026-11-11
+
+**结构调整版。没有新增优化能力，只做减法与去重——并修掉一个藏了两轮的 bug。**
+
+### Fixed
+
+- **`api.js` 的晚绑定 bug（真实功能失效，不是风格问题）**：`installApi` 在装配时
+  解构 `backfill` 与 `retrimPreparedCache`，但这两个值是别的模块在装配**之后**才写
+  进共享 `pc` 的。因为 `installApi` 走 `ctx.inject(['webServer'])` 懒装配（webServer
+  早于 `sessionPersistence` 就绪），解构到的是 `undefined` 且永不更新：
+  - `config.set` 改 `preparedCacheSize` **不重裁**；
+  - 打开 `backfillOnBoot` **不补跑扫描**。
+
+  现在 `api.js` 通过 `runtime.backfill.get()` 在**每次请求时**取值。
+  `tests/test_context.mjs` 复刻了失败现场（installApi 时 runtime 为空、之后才登记），
+  断言补跑确实被触发（`scanCalls=1`），反向也验了「定时器未触发时不补跑」。
+
+### Added
+
+- **`lib/context.js`**：把共享 `pc` 拆成 `deps`（构造时全部就绪、`Object.freeze`
+  的只读依赖）与 `runtime`（晚绑定槽）。只有需要晚绑定的 `api.js` 拿后者。
+- **`lib/patch-target.js`**：方法替换样板归一。`resolveMethod` / `wrapMethod` /
+  `sourceOf` 三个原语，统一了此前三处各写一遍且细节漂移的「判断自身属性 → 替换 →
+  dispose 还原」。`sourceOf` 明确处理 cordis Proxy 把实例方法包成 `[native code]`
+  的问题。
+- **`lib/constants.js`**：魔法数字具名（`BACKFILL_DELAY_MS` / `API_BODY_LIMIT_BYTES` /
+  `FOLD_GUARD_ITERATIONS` / `BYTES_PER_EVENT` / `DEFAULT_MEMORY_BUDGET_BYTES`）。
+- **`lib/yield.js`**：`makeYieldLoop` 从 `runtime.js` 迁出——`runtime.js` 从此只放
+  dsh 兼容垫片。
+- **`stats.memoryBudget`**：内存预算的实时快照挂到 stats 上（`cachedEntries` /
+  `estimatedBytes` / `budgetBytes`）。原先挂在 `pc.memoryBudgetStats` 上，但**没有
+  任何调用方读取**，属于不可达的观测面。
+- `tests/test_context.mjs`（12 断言）、`tests/test_patch_target.mjs`（25 断言）。
+
+### Removed
+
+删除三项在 dsh 0.2.2 上恒不生效的能力，共 262 行 + 3 个测试套件：
+
+| 能力 | 行数 | 移除依据 |
+|---|---:|---|
+| 分片投影预热（`warmup`） | 145 | 恒 `alreadyHot`——上游在 `session/created` 同步广播里已把 29 个 cell 建满 |
+| fast initFor | 65 | 依赖的 `persistence.coordinator` 在 0.2.2 已不存在（全包 `grep -c coordinator = 0`），恒 `inactive` |
+| 冷会话 LRU 裁剪 | 52 | 同上 |
+
+连带清理：配置键 22 → 17（删 `warmupEnabled` / `warmOnCreated` / `fastInitFor` /
+`preparedCacheTrim` / `preparedCacheSize`）；stats 删 `warmed` / `skipped` /
+`aborted` / `alreadyHot` / `warmRecent` / `recordWarm`；`session-walk.js` 在实现中途
+被判定为过度设计（删掉 warmup 后 `activeRegistrations` 只剩一个消费者，而那个消费者
+一行 `filter` 就够）并移除。
+
+**保留 `retired` 状态**：虽然当前没有能力会走到它，但它是「上游吸收能力后补丁主动
+让位」这一语义的唯一表达，未来某个补丁需要退役时还要用。
+
+### Changed
+
+- 所有模块签名从 `install(pc)` / `install(pc, ictx)` 改为 `install(deps)` —— `ctx`
+  已在 `deps` 里，不再需要第二个参数。
+- 三处补丁（`chunked-materialize` / `cold-writeback` / `memory-budget`）改用
+  `wrapMethod`，**dispose 语义因此统一**：原型方法 → `delete` 自有属性回落原型；
+  自有属性 → 写回原函数。此前 `fast-init-for` 直接 `delete` 不保留原值，是漂移的证据。
+- `config.chunkSize` / `chunkYieldMs` / `minEvents` 的注释从「预热专用」改为
+  「分片遍历的通用参数」——它们实际由 `backfill` 与 `coldWriteBack` 使用。
+- 文档同步：README 能力表删三行、配置表 22 → 17 键；ARCHITECTURE 的第 2 节改为
+  「已移除」并保留它留下的两条硬性知识（cell 形状、`init(header, cut)` 签名）；
+  RUNTIME-ANALYSIS 的场景 C 标为历史记录；COMPATIBILITY 修正 `KNOWN_runtime_VERSIONS`
+  → `KNOWN_DSH_VERSIONS` 的错名。
+
+### 结构改善的量化
+
+| 指标 | 1.9.0 | 1.10.0 |
+|---|---:|---:|
+| `lib/` 行数 | 1957 | **1836**（净减 121，删 262 加 141） |
+| 模块数 | 15 | 15（删 3 加 3） |
+| 配置键 | 22 | **17** |
+| 测试套件 | 11 | **10** |
+| 断言数 | 228 | **206** |
+| `lib/` 内部 import 边 | 0（全靠 `pc` 隐式） | **6**（`constants` / `context` / `patch-target` / `yield` / `cache-identity` 被显式引用） |
+
+### 未做的事
+
+- **没有收紧 `engines.dsh`**。删除 warmup 后 0.1.x 上可用的能力只剩零拷贝 fork 与
+  分片 materialize，但两者都带特征校验、不匹配会自动跳过。收紧到 `>=0.2.0` 是独立
+  的破坏性决定（会主动拦住仍能用的用户），已在 README「已知限制」里如实写明，留待
+  单独决策。
+- **没有合并 `backfill` 与 `cold-writeback` 的折叠循环**。两者的数据来源不同
+  （前者逐行流式解析日志，后者已有事件数组），强行合并会引入条件分支而不减少复杂度。
+
 ## [1.9.0] — 2026-11-11
 
 **空间维度的第一轮：把事件缓存从「按条数限容」改成「按字节限容」。**

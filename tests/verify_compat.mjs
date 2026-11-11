@@ -215,17 +215,14 @@ check('api contract: config.set accepts a flat key/value body',
     && /if \(key in payload\) setConfigValue\(key, payload\[key\]\)/.test(apiSrc))
 
 // 运行时观测面契约（见 docs/RUNTIME-ANALYSIS.md）：
-// - debug.fork 必须由 debugApi 把关，默认关闭；
-// - stats 必须有 alreadyHot 计数，否则「上游已建满 cell」会被误读成预热成功；
-// - 预热对已存在的 cell 必须返回 hot 而不是 skip（区分「别人折完」与「无事可做」）。
-const warmupSrc = readFileSync(new URL('../lib/warmup.js', import.meta.url), 'utf8')
+// - debug.fork 必须由 debugApi 把关，默认关闭。
+// （v1.10.0 移除了分片预热能力，对应的 alreadyHot / hot 状态断言已删除。
+//   历史实测数据仍保留在 docs/RUNTIME-ANALYSIS.md 的场景 C。）
 const statsSrc = readFileSync(new URL('../lib/stats.js', import.meta.url), 'utf8')
 check('runtime probe: debug.fork is gated by debugApi',
   apiSrc.includes("method === 'debug.fork'") && apiSrc.includes('config.debugApi'))
-check('runtime probe: stats counts alreadyHot sessions',
-  statsSrc.includes('alreadyHot: 0') && warmupSrc.includes('stats.alreadyHot += 1'))
-check('runtime probe: warmup labels pre-built cells as hot, not skip',
-  warmupSrc.includes("status: 'hot'") && warmupSrc.includes("outcome.status === 'hot'"))
+check('stats: keeps the retired status (upstream-absorbed capability must be expressible)',
+  statsSrc.includes('retired'))
 
 // config 的环境变量覆盖（离线测量用）：必须由 DEFAULT_CONFIG 键驱动，不另立清单。
 const configSrc = readFileSync(new URL('../lib/config.js', import.meta.url), 'utf8')
@@ -260,7 +257,6 @@ check('cache identity: upstream identityOf shape unchanged',
 const identitySrc = readFileSync(new URL('../lib/cache-identity.js', import.meta.url), 'utf8')
 check('cache identity: single shared constructor (no duplicates in lib/)',
   identitySrc.includes('export function makeCacheIdentity')
-    && !readFileSync(new URL('../lib/warmup.js', import.meta.url), 'utf8').includes('formatVersion: header?.version')
     && !readFileSync(new URL('../lib/backfill.js', import.meta.url), 'utf8').includes('formatVersion: meta.version'))
 
 // ---- turnOutline 折叠加速（v1.8）----
@@ -304,10 +300,14 @@ check('memory budget: eviction upstream only counts entries, not bytes',
 check('memory budget: cold log memo is also entry-count bounded',
   cacheSrc !== undefined && src('dsh-session-persistence-jsonl').includes('COLD_LOG_MEMO_MAX_ENTRIES = 2'))
 const memBudgetSrc = readFileSync(new URL('../lib/memory-budget.js', import.meta.url), 'utf8')
+const constantsSrc = readFileSync(new URL('../lib/constants.js', import.meta.url), 'utf8')
 check('memory budget: plugin only evicts unpinned entries (refs === 0)',
   memBudgetSrc.includes('candidate?.refs > 0') && memBudgetSrc.includes('continue'))
 check('memory budget: defaults to 512 MiB, 0 disables',
-  /memoryBudgetBytes:\s*536870912/.test(configSrc) && memBudgetSrc.includes("setPatchStatus('memoryBudget', 'off')"))
+  // 默认值住在 constants.js（具名常量），config.js 引用它；0 关闭的分支在模块里。
+  /DEFAULT_MEMORY_BUDGET_BYTES = 536870912/.test(constantsSrc)
+    && configSrc.includes('memoryBudgetBytes: DEFAULT_MEMORY_BUDGET_BYTES')
+    && memBudgetSrc.includes("setPatchStatus('memoryBudget', 'off')"))
 
 console.log(failures === 0 ? (warns > 0 ? `\nALL PASS (${warns} warning(s))` : '\nALL PASS') : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)

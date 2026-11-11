@@ -14,7 +14,9 @@ const check = (label, cond, extra = '') => {
   if (!cond) failures++
 }
 
-const { installMemoryBudget, BYTES_PER_EVENT } = await import('../lib/memory-budget.js')
+const { installMemoryBudget } = await import('../lib/memory-budget.js')
+// BYTES_PER_EVENT 在 v1.10.0 移到了 constants.js（原先从 memory-budget 导出）
+const { BYTES_PER_EVENT } = await import('../lib/constants.js')
 
 const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms))
 
@@ -150,13 +152,15 @@ check('bytes-per-event is a sane estimate (300-500)', BYTES_PER_EVENT >= 300 && 
 }
 
 // ---- 统计接口 ----
+// v1.10.0 起快照挂在 `stats.memoryBudget`（statt.get 可读），不再挂 pc 下的函数。
 {
   const h = makeHarness({ eventsPerSession: 50000, cacheSessions: 3, budget: 1024 * 1048576 })
   installMemoryBudget(h.pc, h.pc.ctx)
-  const s = h.pc.memoryBudgetStats()
-  check('stats: reports budget', s.budgetBytes === 1024 * 1048576)
-  check('stats: reports estimated bytes', s.estimatedBytes === 3 * 50000 * BYTES_PER_EVENT, String(s.estimatedBytes))
-  check('stats: reports cached entries', s.cachedEntries === 3)
+  const s = h.stats.memoryBudget
+  check('stats: snapshot exposed on stats', s !== undefined)
+  check('stats: reports budget', s?.budgetBytes === 1024 * 1048576)
+  check('stats: reports estimated bytes', s?.estimatedBytes === 3 * 50000 * BYTES_PER_EVENT, String(s?.estimatedBytes))
+  check('stats: reports cached entries', s?.cachedEntries === 3)
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAIL`)

@@ -22,16 +22,20 @@ DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长
 | **turnOutline 折叠加速** | `turnOutline` 的 `apply` 每次 turn 整数组复制（O(n²)），30 000 turn 占冷读 16 秒 | **冷读 21.2 s → 3.0 s**（7×）；输出逐字段一致 | **补丁（时间维度主力）** |
 | **事件缓存字节预算** | dsh 的缓存全按「会话条数」限容，不按字节；连开 6 个 18 MB 会话涨 821 MB | **稳态 RSS 1324 MB → 690 MB**（预算 128 MiB） | **补丁（空间维度主力）** |
 | 零拷贝 fork | fork 时逐事件深拷贝整个会话 | **UI 的「分支会话」不走这个补丁点**；直测 24 万事件同进程 A/B 约 -16% ~ -21% | 补丁（部分失效） |
-| 分片投影预热 | 打开历史会话时同步冷折叠冻结事件循环 | **在 0.2.2 上不生效**：上游在 `session/created` 广播里已把 cell 建满 | 补丁（已失效） |
 | 分片 materialize | 落盘时把整个会话序列化成一个巨大字符串 | 生效：24 万事件 2 帧 → 6 帧，字节数不变（差 0.02%） | 补丁 |
-| fork 缓存回填 | fork 子会话没有投影缓存行，重开走全量读 | 依赖预热，预热不触发时不会执行 | 补丁（可达性受限） |
 | 冷读回写 | 冷读后把投影状态写成缓存行 | **实测无耗时收益**（有行 19.1s vs 无行 18.9s） | 补丁（默认关） |
-| 冷会话 LRU 裁剪 | 冷会话事件树各占数百 MB，多份叠加 OOM | 依赖的 `coordinator.preparations` 在 0.2.2 已不存在 | `inactive` |
 | heap 上限告警 | V8 heap 上限过低时无任何提示 | 生效；但日志走 `logger.info`，默认级别下不可见 | 运行时检查 |
 
-> **`stats.patches` 显示 `active` ≠ 在真实链路上被调用。** 零拷贝与预热都是
-> `active`，但一个从未被 UI 调用、一个每轮都静默跳过。判断实际效果要看
-> `stats.zeroCopy` / `stats.warmed` / `stats.memoryBudgetTrimmed` 这些命中计数。
+> **1.10.0 移除了三项能力**：分片投影预热（`warmup`）、fast initFor、冷会话 LRU 裁剪。
+> 前者的实测结论是「在 0.2.2 上恒 `alreadyHot`」——上游在 `session/created` 的同步
+> 广播里就把全部投影 cell 建满了，预热没有可折的单元；后两者依赖的
+> `persistence.coordinator` 在 0.2.2 里已不存在（全包 `grep -c coordinator = 0`），
+> 恒 `inactive`。删除后插件缩了 262 行、配置键从 22 降到 17。历史实测数据仍完整保留在
+> [docs/RUNTIME-ANALYSIS.md](docs/RUNTIME-ANALYSIS.md) 的场景 C。
+>
+> **`stats.patches` 显示 `active` ≠ 在真实链路上被调用。** 零拷贝是 `active`，
+> 但从未被 UI 调用。判断实际效果要看 `stats.zeroCopy` / `stats.memoryBudgetTrimmed`
+> 这些命中计数。
 >
 > **时间维度**（[RUNTIME-ANALYSIS.md](docs/RUNTIME-ANALYSIS.md)）：冷读 21.2 s 里
 > 76% 是 `turnOutline` 一个单元的 O(n²) 折叠（每次 turn 都整数组复制）。用 O(N)
@@ -107,13 +111,10 @@ node --max-old-space-size=8192 <dsh 入口> web
 | 键 | 默认 | 单位 | 说明 |
 |---|---|---|---|
 | `zeroCopyFork` | `true` | — | 零拷贝 fork |
-| `fastInitFor` | `true` | — | fast initFor（新版 dsh 自动退役） |
 | `slowForkWarnMs` | `100` | ms | fork 耗时超过此值打告警 |
-| `warmupEnabled` | `true` | — | 投影分片预热总开关 |
 | `minEvents` | `20000` | 事件 | 低于此事件数不预热 |
 | `chunkSize` | `5000` | 事件 | 每片折叠事件数（下限 1） |
 | `chunkYieldMs` | `0` | ms | 让出方式：0 = `setImmediate`，>0 = `setTimeout` |
-| `warmOnCreated` | `true` | — | `session/created`（含 resume）即预热 |
 | `keepRecent` | `50` | 条 | 内存保留的最近统计记录数 |
 | `backfillOnBoot` | `false` | — | 启动后补写磁盘冷会话的投影缓存行 |
 | `backfillMaxSessions` | `8` | 个 | 补行扫描会话数上限 |
@@ -121,8 +122,6 @@ node --max-old-space-size=8192 <dsh 入口> web
 | `backfillMaxBytes` | `33554432` | 字节 | 补行的最大文件大小（32 MiB） |
 | `chunkedMaterialize` | `true` | — | 分片落盘 |
 | `materializeChunkEvents` | `50000` | 事件 | 每帧事件数（下限 1000） |
-| `preparedCacheTrim` | `true` | — | 冷会话 LRU 裁剪总开关 |
-| `preparedCacheSize` | `1` | 份 | 裁剪目标容量（dsh 官方默认 5） |
 | `heapWarnBytes` | `6442450944` | 字节 | heap 上限告警阈值（6 GiB） |
 | `debugApi` | `false` | — | 打开后暴露 `debug.fork` 调试端点（仅用于测量） |
 | `coldWriteBack` | `false` | — | 冷读后回写投影缓存行（实测无耗时收益，仅让列表读看到更新数据） |
@@ -224,12 +223,13 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
   主动控制会话规模。
 - **零拷贝 fork 在 dsh 0.2.2 的 UI fork 链路上不生效**：上游 `session/fork` RPC
   改为自建 seed 后走 `agents.create`，不再经过 `SessionStore.prototype.fork`。
-- **分片预热在 dsh 0.2.2 上不生效**：上游在 `session/created` 的同步广播里就把
-  全部投影 cell 建完了，预热没有可折叠的单元。
-- `backfillOnBoot` 的解码在插件层同步执行，超大文件仍可能短暂冻结事件循环。
-- `preparedCacheTrim` 依赖的 `coordinator.preparations` 在 0.2.2 已不存在，
-  当前恒为 `inactive`。
-- 若其他插件禁用了 `session-projection-cache`，本插件的缓存能力会被削弱。
+- **实际只验证过 dsh 0.2.2**。`engines.dsh` 声明仍是 `>=0.1.0-rc.6 <0.3.0-0`，
+  但 1.10.0 移除 `warmup` / `fastInitFor` / `preparedCacheTrim` 之后，0.1.x 上
+  可用的能力只剩零拷贝 fork 与分片 materialize（两者都带特征校验，不匹配会
+  自动跳过）。是否收紧 `engines.dsh` 是独立的破坏性决定，尚未做。
+- `backfillOnBoot` 的解码虽已改为逐帧异步 + 帧间让出，超大文件仍可能引起可感知的
+  延迟，因此默认关闭。
+- 若其他插件禁用了 `session-projection-cache`，本插件的冷读回写能力会被削弱。
 
 ## 开发
 

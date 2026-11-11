@@ -13,7 +13,7 @@
 | 概念 | 位置 | 含义 |
 |---|---|---|
 | **声明范围（允许）** | `package.json` 的 `engines.dsh` | `>=0.1.0-rc.6 <0.3.0-0`。dsh 的加载门禁只读这一项；范围内就允许加载 |
-| **实测验证过** | `lib/runtime.js` 的 `KNOWN_runtime_VERSIONS` | 逐个版本跑过全量测试的清单。不在其中不会阻止加载，但会在启动时打 WARNING |
+| **实测验证过** | `lib/runtime.js` 的 `KNOWN_DSH_VERSIONS` | 逐个版本跑过全量测试的清单。不在其中不会阻止加载，但会在启动时打 WARNING |
 | **门禁拒绝** | 同上 `engines.dsh` | 超出声明范围 → 日志 `skipping profile bundle`，插件不加载 |
 
 三者不是一回事。升级 dsh 到 0.3.x 时门禁会拒绝——那时必须先更新 `engines.dsh`，
@@ -54,8 +54,9 @@
 - `encodeMaterialization(meta, events)` → `(meta, inheritedEventCount, events)`。
 - 事件词汇收紧：`assistant/message` 需 `data.stream`，消息需 `id/source/role` 校验。
 
-对本插件：`preparedCacheTrim` 从此刻起永久 `inactive`（coordinator 已不存在），
-`chunkedMaterialize` 换到新签名分支，`zeroCopyFork` 换到 `eventState` 分支。
+对本插件：`chunkedMaterialize` 换到新签名分支，`zeroCopyFork` 换到 `eventState`
+分支。（`preparedCacheTrim` 曾依赖此时消失的 `coordinator`，该能力已于 v1.10.0
+移除。）
 
 ## 0.2.2-rc.1：五处变更
 
@@ -108,18 +109,19 @@ meta: { cwd, isSeeded: true }
 | 新增 `summaryKeys()` / `onEventChanged()` | 摘要 key 集合、事件级变更订阅；`wire.summary !== false` 决定是否进摘要 |
 | `cachedSnapshot()` 标记废弃 | 只返回别处已算过的值，不得用于决策 |
 
-**对本插件：无破坏，但有一处适配；运行时实测该项能力在 0.2.2 上已失效。**
+**对本插件：无破坏。**
 
 我们不调用 `register()`（只用内部 `registrations` / `cells` / `buildCell`），
-异步化不影响。预热写入的 cell 仍被 `snapshot()` 采用。适配点：预热循环跳过
-`refs === 0` 的已释放单元（见 `lib/warmup.js`）。
+异步化不影响。`refs === 0` 的语义变化只有「自己折投影」的实现才需要关心——该实现
+（分片预热）已于 v1.10.0 移除，原因见下。
 
 **运行时实测（[RUNTIME-ANALYSIS.md](RUNTIME-ANALYSIS.md) 场景 C）**：
 `dsh-api-session-controller` 在 `session/created` 的同步广播里调
 `snapshot(session)`（不带 keys），`cellFor()` 随即对全部 29 个单元执行
-`buildCell()` 一次性折完并写入 `registration.cells`。插件的预热监听器注册更晚，
-轮到它时所有 cell 已存在，逐单元返回 `hot`，`stats.warmed` 恒为 0。这是 0.2.2
-上预热失效的根因，不能靠调整监听器顺序解决（顺序由 bundle 加载次序决定）。
+`buildCell()` 一次性折完并写入 `registration.cells`。任何注册更晚的
+`session/created` 监听器都会发现 cell 已全部存在——这正是分片预热在 0.2.2 上
+失效的根因，不能靠调整监听器顺序解决（顺序由 bundle 加载次序决定）。
+v1.10.0 因此删除了该能力。
 
 ### 4. 平台门禁（`dsh-app-boot`）
 
@@ -189,10 +191,11 @@ dsh 从插件 `package.json` 读两类信息，缺一不可：
    `skipping profile bundle`。
 2. `node tests/verify_compat.mjs` 全通过（依赖 `scripts/link-deps.ps1` 先建好 junction）。
 3. `npm test` 全通过（含真实组件 e2e），记下运行器打印的断言总数。
-4. 若新版本不在 `KNOWN_runtime_VERSIONS`，在 `lib/runtime.js` 与
+4. 若新版本不在 `KNOWN_DSH_VERSIONS`，在 `lib/runtime.js` 与
    `tests/verify_compat.mjs` 两处登记（两处必须保持一致）。
 5. 实机启动 web profile，用 `stats.get` 确认各点位状态符合预期。真实状态键只有
-   5 个：`zeroCopyFork`、`fastInitFor`、`preparedCacheTrim`、`chunkedMaterialize`、
-   `warmup`（heap 检查不在其中）。
+   4 个补丁：`zeroCopyFork`、`chunkedMaterialize`、`fastTurnOutline`、
+   `memoryBudget`，外加可选的 `coldWriteBack`（默认关=off）。heap 检查不在其中。
+   （`warmup` / `fastInitFor` / `preparedCacheTrim` 已于 v1.10.0 移除。）
 6. 如果这次升级需要更新 `engines.dsh`（例如跨到 0.3.x），同步更新 README 的支持
    版本一行与 `docs/ARCHITECTURE.md` 顶部的验证边界。

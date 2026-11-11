@@ -108,6 +108,10 @@ debugApi 默认 = false
 
 ## 场景 C：预热（warmup 打开，resume 触发）
 
+> **本节是历史记录。该能力已在 v1.10.0 移除** —— 实测结论就是「在这条路径上永远
+> 跑不成」，保留说明是为了让后来者不重复投入。它留下的两条硬性知识（cell 形状、
+> `init(header, cut)` 签名）已写入 [ARCHITECTURE.md](ARCHITECTURE.md) 第 2 节。
+
 `warmupEnabled=true`、`minEvents=20000`，用 `session/rename` 触发服务端 resume
 （`resolveAgent` → `handle.read(0)` → `sessions.prepare` → `enter` → `announce`，
 `announce` 内同步 emit `session/created`）：

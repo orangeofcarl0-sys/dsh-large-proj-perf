@@ -18,10 +18,9 @@ const here = dirname(fileURLToPath(import.meta.url))
 // 运行顺序：兼容性/契约 → 各点位 → 真实组件 e2e（重负载放最后）
 const ORDER = [
   'verify_compat.mjs',
+  'test_context.mjs',
+  'test_patch_target.mjs',
   'smoke_fork.mjs',
-  'test_fast_initfor.mjs',
-  'test_cache_trim.mjs',
-  'smoke_warmup.mjs',
   'test_cold_writeback.mjs',
   'test_fast_turn_outline.mjs',
   'test_memory_budget.mjs',

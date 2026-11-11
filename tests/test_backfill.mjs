@@ -57,31 +57,9 @@ function makeCtx({ registry, cache, sessions, persistence, dshHomePaths, setting
   }
 }
 
-// ================= 用例 1：fork 子会话预热后回填缓存行 =================
-{
-  const registry = makeRegistry()
-  registry.register(defCounter)
-  const cache = makeCache()
-  const N = 25000
-  const events = []
-  for (let seq = 0; seq < N; seq++) events.push({ type: 'step/start', seq, time: 1, data: { turn: 1, step: 1 } })
-  const session = {
-    id: 'session-child1',
-    header: { id: 'session-child1', version: 0, createdAt: 123, cwd: 'C:\\b', parentSession: 'session-parent', seedLength: N },
-    events: Object.freeze([...events]),
-  }
-  const sessions = new Map([['session-child1', session]])
-  const ctx2 = makeCtx({ registry, cache, sessions })
-  const dispose = plugin.apply(ctx2)
-  await new Promise((r) => setTimeout(r, 400))
-  const rec = cache.records.get('session-child1')
-  check('fork child cache row backfilled', rec !== void 0)
-  if (rec) {
-    check('row watermark = last seq', rec.rows.counter.seq === N - 1, `seq=${rec.rows.counter.seq}`)
-    check('row value matches fold', rec.rows.counter.val.count === N)
-  }
-  dispose()
-}
+// 用例 1（fork 子会话预热后回填缓存行）已随 v1.10.0 删除分片预热能力一并移除。
+// 当时的实测结论保留在 docs/RUNTIME-ANALYSIS.md 的场景 C：该路径在 0.2.2 上
+// 恒 alreadyHot（上游在 session/created 广播里已把 cell 建满），回填永不触发。
 
 // ================= 用例 2：非 fork 会话不回填 =================
 {
