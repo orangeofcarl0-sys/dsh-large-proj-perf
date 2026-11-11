@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "大会话性能优化",
-    "description": "让 fork、冷会话加载与超大会话落盘不再阻塞事件循环：零拷贝 fork、投影分片预热、fork 缓存回填、分片 materialize、冷会话内存治理，以及 V8 heap 上限告警。"
+    "description": "降低数十万事件长会话的打开延迟与内存占用：turnOutline 折叠从 O(n²) 改 O(n)（冷读 21.2s → 3.0s）、事件缓存按字节限容（稳态 RSS 1324 → 690 MB）、分片 materialize 消除超大会话落盘的 RangeError、零拷贝 fork，以及 V8 heap 上限告警。"
   }
 }
