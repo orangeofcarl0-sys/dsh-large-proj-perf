@@ -1,6 +1,6 @@
 # 运行时探测报告归档
 
-本目录的 `report.json` / `report.md` 是 `docs/RUNTIME-ANALYSIS.md` 所引数据的原始输出，
+本目录的 `report.json` / `report.md` 是 `docs/MEASUREMENTS.md` 所引数据的原始输出，
 由 [`tools/runtime-probe/run.mjs`](../../tools/runtime-probe/run.mjs) 生成。
 
 - 被测 dsh：`0.2.2-rc.1`

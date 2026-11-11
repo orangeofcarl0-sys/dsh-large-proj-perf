@@ -6,62 +6,46 @@
 [![dsh](https://img.shields.io/badge/dsh-0.2.2--rc.1-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长会话，消除 fork、
-历史会话打开、超大会话落盘对事件循环的阻塞，并治理冷会话内存。
+DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长会话，降低打开时的
+延迟与内存占用。
 
 > 名字里的 "large-proj" 是历史遗留；它优化的对象是**会话规模**，与项目大小无关。
 
-四项优化都以补丁形式挂在 dsh 内部方法上，每项都带**源码特征校验 + 协议探测 +
-三层回退**（能力探测 / try-catch / 配置开关）。dsh 内部结构变化时对应补丁会自动
-跳过并告警，功能回退到官方实现，不会出错。
+每项能力都带**源码特征校验 + 协议探测 + 三层回退**（能力探测 / try-catch / 配置
+开关）。dsh 内部结构变化时对应补丁会自动跳过并告警，功能回退到官方实现，不会出错。
 
 ## 能力与效果
 
-| 能力 | 解决什么 | 运行时实测（dsh 0.2.2-rc.1） | 状态 |
+数字都是 dsh 0.2.2-rc.1 上的实测值，来源与测量边界见
+[docs/MEASUREMENTS.md](docs/MEASUREMENTS.md)。
+
+| 能力 | 解决什么 | 实测效果 | 默认 |
 |---|---|---|---|
-| **turnOutline 折叠加速** | `turnOutline` 的 `apply` 每次 turn 整数组复制（O(n²)），30 000 turn 占冷读 16 秒 | **冷读 21.2 s → 3.0 s**（7×）；输出逐字段一致 | **补丁（时间维度主力）** |
-| **事件缓存字节预算** | dsh 的缓存全按「会话条数」限容，不按字节；连开 6 个 18 MB 会话涨 821 MB | **稳态 RSS 1324 MB → 690 MB**（预算 128 MiB） | **补丁（空间维度主力）** |
-| 零拷贝 fork | fork 时逐事件深拷贝整个会话 | **UI 的「分支会话」不走这个补丁点**；直测 24 万事件同进程 A/B 约 -16% ~ -21% | 补丁（部分失效） |
-| 分片 materialize | 落盘时把整个会话序列化成一个巨大字符串 | 生效：24 万事件 2 帧 → 6 帧，字节数不变（差 0.02%） | 补丁 |
-| 冷读回写 | 冷读后把投影状态写成缓存行 | **实测无耗时收益**（有行 19.1s vs 无行 18.9s） | 补丁（默认关） |
-| heap 上限告警 | V8 heap 上限过低时无任何提示 | 生效；但日志走 `logger.info`，默认级别下不可见 | 运行时检查 |
+| **turnOutline 折叠加速** | 该投影单元每次 turn 整数组复制（O(n²)），占冷读 76% | 冷读 **21.2 s → 3.0 s** | 开 |
+| **事件缓存字节预算** | dsh 的缓存只按「会话条数」限容；6 个 18 MB 会话涨到 1.2 GB | 稳态 RSS **1324 → 690 MB** | 开（512 MiB） |
+| 分片 materialize | 落盘时把整个会话序列化成一个巨大字符串 | 2 帧 → 6 帧，消除 `RangeError` | 开 |
+| 零拷贝 fork | fork 时逐事件深拷贝整个会话 | 直测 -16% ~ -21%（**但 UI 不走这条路**，见下） | 开 |
+| 冷读回写 | 冷读后把投影状态写成缓存行 | **无耗时收益**，只让列表读看到新数据 | 关 |
+| 冷会话补行 | 磁盘上的大会话没有投影缓存行 | 启动 15 s 后批量补写 | 关 |
+| heap 上限告警 | V8 heap 上限过低时无任何提示 | 启动时检查并告警 | — |
 
-> **1.10.0 移除了三项能力**：分片投影预热（`warmup`）、fast initFor、冷会话 LRU 裁剪。
-> 前者的实测结论是「在 0.2.2 上恒 `alreadyHot`」——上游在 `session/created` 的同步
-> 广播里就把全部投影 cell 建满了，预热没有可折的单元；后两者依赖的
-> `persistence.coordinator` 在 0.2.2 里已不存在（全包 `grep -c coordinator = 0`），
-> 恒 `inactive`。删除后插件缩了 262 行、配置键从 22 降到 17。历史实测数据仍完整保留在
-> [docs/RUNTIME-ANALYSIS.md](docs/RUNTIME-ANALYSIS.md) 的场景 C。
->
-> **`stats.patches` 显示 `active` ≠ 在真实链路上被调用。** 零拷贝是 `active`，
-> 但从未被 UI 调用。判断实际效果要看 `stats.zeroCopy` / `stats.memoryBudgetTrimmed`
-> 这些命中计数。
->
-> **时间维度**（[RUNTIME-ANALYSIS.md](docs/RUNTIME-ANALYSIS.md)）：冷读 21.2 s 里
-> 76% 是 `turnOutline` 一个单元的 O(n²) 折叠（每次 turn 都整数组复制）。用 O(N)
-> 等价 fold 替换后 21.2 s → 3.0 s。
->
-> **空间维度**（[MEMORY-ANALYSIS.md](docs/MEMORY-ANALYSIS.md)）：18 MB 的会话在
-> 内存里是 87.7 MB 堆对象（约 5 倍），而 dsh 的三处事件缓存都按「会话条数」限容
-> （5 + 2 条），最多可同时驻留 7 份。给它们加字节预算后稳态 RSS 降约一半。
->
-> 与其他 harness 的横向对比见 [docs/HARNESS-COMPARISON.md](docs/HARNESS-COMPARISON.md)。
+### 两条必须知道的限制
 
-「补丁」的实际状态经 `stats.get` 的 `patches` 字段暴露，取值：
+**① `stats.patches` 显示 `active` 不等于在真实链路上被调用。**
 
-- `active` — 已安装（不代表本轮被调用）
-- `inactive` — 环境里没有对应结构，或源码特征不匹配（自动跳过）
-- `off` — 被配置显式关闭
-- `retired` — 上游已原生实现该能力，补丁主动退役（目前只有 `fastInitFor` 会到这一步）
+零拷贝 fork 挂在 `SessionStore.prototype.fork` 上，而 dsh 0.2.2 的服务端
+`session/fork` RPC 改走 `agents.create({seed})`，**不再调用该方法**——实测 Web UI
+分支会话后 `stats.forks = 0`。补丁本身有效（用 `debugApi` 的 `debug.fork` 直测），
+但在 UI 链路上是死代码。
 
-`heap 上限告警` 不是补丁，不在 `stats.patches` 里。
+**② 插件日志在默认配置下不可见。**
+
+正常日志走 `ctx.logger.info`，dsh 默认日志级别会过滤掉它——隔离实例里
+`[dsh-perf]` 行数为 0，尽管插件已正常装载。排错请用 `stats.get`，不要靠 grep 日志。
 
 ## 安装
 
-要求 Node **≥ 22.15.0**（需要 `node:zlib` 的 zstd 接口），dsh `0.1.0-rc.6` ~ `0.2.2-rc.1`。
-
-> 上方 `dsh` 徽章标注的是**当前开发基线**（最近一次实测通过的版本），不是支持范围的全部。
-> 实际允许范围见 `package.json` 的 `engines.dsh`。
+要求 Node **≥ 22.15.0**（需要 `node:zlib` 的 zstd 接口）。
 
 ```sh
 # 从 npm 安装（推荐）
@@ -77,10 +61,10 @@ dsh plugin --profile web add file:<本仓库路径>
 dsh plugin --profile web remove dsh-large-proj-perf
 ```
 
-重启 `dsh web` 后，启动日志出现这一行即装载成功：
+重启 `dsh web` 后，用 `stats.get` 确认装载成功（日志默认不可见，见上）：
 
-```
-[dsh-perf] installed (zeroCopy=true, fastInitFor=true, warmup=true minEvents=20000, chunkedMaterialize=true)
+```sh
+curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/stats.get
 ```
 
 `file:` 安装是拷贝而非链接，不跟随源码改动。改完代码需要重新
@@ -90,8 +74,8 @@ dsh plugin --profile web remove dsh-large-proj-perf
 
 ### 建议同时调高 V8 heap 上限
 
-多个大会话并存时，每个 live 事件树可达数百 MB，默认 ~4GB 上限容易 OOM。heap 上限是
-**启动期参数**，进程内改不了：
+多个大会话并存时，每个 live 事件树可达数百 MB（实测 24 万事件 = 87.7 MB 堆对象，
+首次读的 RSS 增量可达 242 MB）。heap 上限是**启动期参数**，进程内改不了：
 
 ```powershell
 # 仓库自带脚本，内置 --max-old-space-size=8192
@@ -101,7 +85,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-dsh.ps1
 node --max-old-space-size=8192 <dsh 入口> web
 ```
 
-插件会在上限低于 6GB 时打告警，但不会代为修改。
+插件会在上限低于 6 GiB 时打告警，但不会代为修改。
 
 ## 配置
 
@@ -110,48 +94,31 @@ node --max-old-space-size=8192 <dsh 入口> web
 
 | 键 | 默认 | 单位 | 说明 |
 |---|---|---|---|
+| `fastTurnOutline` | `true` | — | `turnOutline` 的 O(n²) → O(n) |
+| `memoryBudgetBytes` | `536870912` | 字节 | 事件缓存总预算（512 MiB）；`0` 关闭 |
+| `heapWarnBytes` | `6442450944` | 字节 | heap 上限告警阈值（6 GiB） |
 | `zeroCopyFork` | `true` | — | 零拷贝 fork |
 | `slowForkWarnMs` | `100` | ms | fork 耗时超过此值打告警 |
-| `minEvents` | `20000` | 事件 | 低于此事件数不预热 |
-| `chunkSize` | `5000` | 事件 | 每片折叠事件数（下限 1） |
+| `chunkedMaterialize` | `true` | — | 分片落盘 |
+| `materializeChunkEvents` | `50000` | 事件 | 每帧事件数（下限 1000） |
+| `minEvents` | `20000` | 事件 | 低于此事件数的会话不做额外处理 |
+| `chunkSize` | `5000` | 事件 | 分片遍历每片的事件数（下限 1） |
 | `chunkYieldMs` | `0` | ms | 让出方式：0 = `setImmediate`，>0 = `setTimeout` |
 | `keepRecent` | `50` | 条 | 内存保留的最近统计记录数 |
+| `coldWriteBack` | `false` | — | 冷读后回写投影缓存行（无耗时收益） |
 | `backfillOnBoot` | `false` | — | 启动后补写磁盘冷会话的投影缓存行 |
 | `backfillMaxSessions` | `8` | 个 | 补行扫描会话数上限 |
 | `backfillMinBytes` | `1048576` | 字节 | 补行的最小文件大小（1 MiB） |
 | `backfillMaxBytes` | `33554432` | 字节 | 补行的最大文件大小（32 MiB） |
-| `chunkedMaterialize` | `true` | — | 分片落盘 |
-| `materializeChunkEvents` | `50000` | 事件 | 每帧事件数（下限 1000） |
-| `heapWarnBytes` | `6442450944` | 字节 | heap 上限告警阈值（6 GiB） |
-| `debugApi` | `false` | — | 打开后暴露 `debug.fork` 调试端点（仅用于测量） |
-| `coldWriteBack` | `false` | — | 冷读后回写投影缓存行（实测无耗时收益，仅让列表读看到更新数据） |
-| `fastTurnOutline` | `true` | — | 把 `turnOutline` 的 O(n²) 折叠换成 O(n)（冷读 21.2s → 3.0s） |
-| `memoryBudgetBytes` | `536870912` | 字节 | 事件缓存总额上限（512 MiB，约 6 份 24 万事件会话）；`0` 关闭 |
+| `debugApi` | `false` | — | 暴露 `debug.fork` 调试端点（仅用于测量） |
 
-`backfillOnBoot` 默认关闭：它的解码在插件层同步执行，超大文件仍可能短暂冻结事件
-循环，需要时再开。开启后补行任务在启动 **15 秒**后触发，不会立刻执行。
+**哪些键运行期改得动**：`fastTurnOutline` / `chunkedMaterialize` / `zeroCopyFork`
+只在安装时读一次，改了要重启（或用启动期环境变量，见下）。其余键在下次使用时重读。
 
-`debugApi` 默认关闭。打开后多出 `POST .../api/debug.fork`，直接调用
-`SessionStore.prototype.fork` —— 这是测量零拷贝补丁的**唯一**途径，因为 dsh 0.2.2
-的常规 fork RPC 已经不经过该方法。生产环境不要开。
-
-启动期还可用环境变量覆盖任意配置键（仅用于离线测量，见
-[`tools/runtime-probe/README.md`](tools/runtime-probe/README.md)）：键名是大写蛇形
-加 `DSH_PERF_` 前缀，例如 `DSH_PERF_CHUNKED_MATERIALIZE=false`。这是唯一能改
-`chunkedMaterialize` / `fastInitFor` 的方式——它们只在安装时读一次配置。
+启动期还可用环境变量覆盖任意配置键（仅用于离线测量）：键名是大写蛇形加
+`DSH_PERF_` 前缀，例如 `DSH_PERF_CHUNKED_MATERIALIZE=false`。
 
 ## 验证与排错
-
-启动日志会打印探测到的 dsh 版本和各补丁结果，例如：
-
-```
-[dsh-perf] dsh version: 0.2.2-rc.1 (verified)
-[dsh-perf] zero-copy fork installed (SessionStore.prototype.fork patched, protocol: 0.1.7 forkSeed)
-[dsh-perf] chunked materialize installed (chunk=50000 events/frame, protocol: 0.1.3)
-```
-
-`protocol:` 后面可能是 `0.1.7 forkSeed`、`0.1.3 eventState`、`alpha.5 seedSource`
-之一，取决于 dsh 版本，都是正常输出。
 
 ### HTTP API
 
@@ -160,8 +127,8 @@ node --max-old-space-size=8192 <dsh 入口> web
 
 | 端点 | 说明 |
 |---|---|
-| `stats.get` | 版本探针、各补丁状态、fork/预热/补行计数与最近记录 |
-| `stats.reset` | 清零计数（保留版本探针、补丁状态与 `fastInitForInstalled`） |
+| `stats.get` | 版本探针、各补丁状态与命中计数 |
+| `stats.reset` | 清零计数（保留 `patches` 与 `dshVersion`） |
 | `config.get` / `config.set` | 读取/修改运行时开关，`set` 同时写 settings 持久化 |
 | `debug.fork` | 仅当 `debugApi=true` 时存在：直接调用 `SessionStore.prototype.fork` |
 
@@ -174,62 +141,73 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
 ```
 
 请求体是扁平对象（如 `{"minEvents":20000,"chunkSize":5000}`），**不是**
-`{"key":...,"value":...}` 形式——后者会被静默忽略：接口仍返回 200 和当前配置，
+`{"key":...,"value":...}`——后者会被静默忽略：接口仍返回 200 和当前配置，
 但一个键都没改。
+
+### `stats.get` 怎么读
+
+```jsonc
+{
+  "dshVersion": "0.2.2-rc.1",
+  "patches": { "zeroCopyFork": "active", "fastTurnOutline": "active", ... },
+  "forks": 0, "zeroCopy": 0, "fallbacks": 0, "forkRecent": [],
+  "memoryBudget": { "budgetBytes": 536870912, "cachedEntries": 0, "estimatedBytes": 0 },
+  "memoryBudgetTrimmed": 0, "memoryBudgetFreedBytes": 0, "memoryBudgetOverBudget": 0,
+  "coldWriteBacks": 0, "backfilled": 0, "backfillSkipped": 0
+}
+```
+
+判断某能力是否真的在起作用，看命中计数而不是 `patches`：
+
+| 想知道 | 看 |
+|---|---|
+| 零拷贝 fork 有没有被调用 | `zeroCopy`（长期 0 = 没被调用） |
+| 内存预算有没有在淘汰 | `memoryBudgetTrimmed`（>0 说明生效） |
+| 冷读回写 / 补行有没有跑 | `coldWriteBacks` / `backfilled` |
 
 ### 常见问题
 
 **看不到任何 `[dsh-perf]` 日志**
-这是**默认配置下的常态**，不是故障。插件的正常日志走 `ctx.logger.info`，而 dsh
-默认日志级别会把 `info` 过滤掉（运行时实测：隔离实例里 `[dsh-perf]` 行数为 0，
-但插件已正常装载）。判断插件状态要看 `stats.get` 的 `patches` 与命中计数，不要
-靠 grep 日志。
+这是**默认配置下的常态**，不是故障（见上文「两条必须知道的限制」）。用 `stats.get`
+判断插件状态。
+
+**`stats.patches` 显示 `active`，但好像没效果**
+`active` 只表示装上了，不表示被调用。用上表的命中计数判断。
 
 **日志出现 `signature mismatch`**
 dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实现，不影响正确性）。升级本
-插件到与新 dsh 匹配的版本即可。注意 `tests/` 不随 npm 包发布，如果你是从 npm 安装
-的，无法在安装目录里跑兼容性检查——升级插件是唯一正解。
-
-**`stats.patches` 显示 `active`，但好像没效果**
-`active` 只表示补丁装上了，不表示它在真实链路上被调用。先用命中计数判断：
-`zeroCopy`（零拷贝 fork 次数）、`warmed`（成功预热的会话数）、
-`alreadyHot`（进入时上游已把投影折完的会话数）。三者长期为 0 就说明该项没有实际
-作用。dsh 0.2.2 上的实测情形见 [docs/RUNTIME-ANALYSIS.md](docs/RUNTIME-ANALYSIS.md)。
+插件到与新 dsh 匹配的版本即可。注意 `tests/` 不随 npm 包发布，从 npm 安装的情况下
+无法在安装目录里跑兼容性检查——升级插件是唯一正解。
 
 **日志出现 `skipping profile bundle`**
 插件被 dsh 的版本门禁拦下了。从 dsh 0.2.1 起，门禁读插件 `package.json` 的
 `engines.dsh`；本插件声明 `>=0.1.0-rc.6 <0.3.0-0`。dsh 超出该范围时，要么升级插件，
-要么用 `dsh plugin allow-version <pkg>@<ver> --profile web` 做精确版本豁免（有风险，
-上游可能确实改了插件依赖的结构）。
+要么用 `dsh plugin allow-version <pkg>@<ver> --profile web` 做精确版本豁免（有风险）。
 
 **API 请求 404 或连不上**
 端口可能不是 3080。看 `dsh web` 启动日志里打印的 URL，或 `dsh web --help` 确认。
 
 **改完配置没反应**
-三种情况：`backfillOnBoot` 相关的补行任务在启动 15 秒后才跑；`chunkedMaterialize`
-与 `fastInitFor` 只在安装时读一次，运行期改不了（需要重启，或启动期用
-`DSH_PERF_*` 环境变量）；其余开关（`chunkSize`、`preparedCacheSize` 等）通过
-`config.set` 修改后即时生效。经 Settings 卡片修改需确认已保存到 settings。
+三种情况：`fastTurnOutline` / `chunkedMaterialize` / `zeroCopyFork` 只在安装时读一次，
+改了要重启；`backfillOnBoot` 相关的补行任务在启动 15 秒后才跑；其余开关通过
+`config.set` 修改后即时生效。
 
 **没有任何 `[dsh-perf]` 日志且 `stats.get` 也连不上**
-插件没被加载。检查 `dsh --profile web --dump-config` 里是否有
-`large-proj-perf` 条目，以及启动日志有无 `skipping profile bundle`。
+插件没被加载。检查 `dsh --profile web --dump-config` 里是否有 `large-proj-perf`
+条目，以及启动日志有无 `skipping profile bundle`。
 
 ## 已知限制
 
 - **这是被动优化**，削减不了正在使用的 live 事件树（每会话数百 MB 是物理成本）。
-  运行时实测：24 万事件会话冷读时 RSS 增长约 400 MB。建议配合
-  [dsh-fresh-start](https://github.com/orangeofcarl0-sys/dsh-fresh-start)
+  建议配合 [dsh-fresh-start](https://github.com/orangeofcarl0-sys/dsh-fresh-start)
   主动控制会话规模。
-- **零拷贝 fork 在 dsh 0.2.2 的 UI fork 链路上不生效**：上游 `session/fork` RPC
-  改为自建 seed 后走 `agents.create`，不再经过 `SessionStore.prototype.fork`。
+- **零拷贝 fork 在 dsh 0.2.2 的 UI fork 链路上不生效**（原因见上）。
 - **实际只验证过 dsh 0.2.2**。`engines.dsh` 声明仍是 `>=0.1.0-rc.6 <0.3.0-0`，
-  但 1.10.0 移除 `warmup` / `fastInitFor` / `preparedCacheTrim` 之后，0.1.x 上
-  可用的能力只剩零拷贝 fork 与分片 materialize（两者都带特征校验，不匹配会
-  自动跳过）。是否收紧 `engines.dsh` 是独立的破坏性决定，尚未做。
-- `backfillOnBoot` 的解码虽已改为逐帧异步 + 帧间让出，超大文件仍可能引起可感知的
-  延迟，因此默认关闭。
-- 若其他插件禁用了 `session-projection-cache`，本插件的冷读回写能力会被削弱。
+  但 v1.10.0 移除三项依赖旧结构的能力后，0.1.x 上可用的只剩零拷贝 fork 与分片
+  materialize（两者都带特征校验，不匹配会自动跳过）。是否收紧声明是独立的破坏性
+  决定，尚未做。
+- **`retired` 补丁状态当前无使用者**：v1.10.0 移除了唯一会设置它的能力。保留该状态
+  是因为它是「上游吸收能力后补丁主动让位」的唯一表达。
 
 ## 开发
 
@@ -237,13 +215,13 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
 # 前置：把全局 dsh 的嵌套依赖 junction 到仓库（仓库本身不含 node_modules）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 
-# 全套 8 套件
+# 全套 10 个套件（运行器会打印实测断言总数，当前 206）
 npm test
 ```
 
-运行器会打印实测断言总数。测试分三层：`verify_compat` 对真实安装的 dsh 源码做特征
-断言并实算版本门禁；`e2e_real_components` 用真实实现类（原型链驱动）验证补丁装上后
-的行为；其余套件覆盖逻辑与边界。
+测试分三层：`verify_compat` 对真实安装的 dsh 源码做特征断言并实算版本门禁；
+`e2e_real_components` 用真实实现类（原型链驱动）验证补丁装上后的行为；其余套件
+覆盖逻辑与边界。
 
 这三层都**不验证真实 dsh 进程里的调用链**。那需要起一个隔离实例并驱动 HTTP RPC，
 工具在 [`tools/runtime-probe/`](tools/runtime-probe/README.md)：
@@ -253,14 +231,13 @@ node tools/runtime-probe/run.mjs --home <隔离 home> --agents <agents home> \
   --port 3190 --scenario all --out <输出目录>
 ```
 
-## 深入阅读
+## 文档
 
-| 文档 | 内容 |
-|---|---|
-| [docs/RUNTIME-ANALYSIS.md](docs/RUNTIME-ANALYSIS.md) | **真实进程实测（时间）**：冷读 21.2s 的完整归因、各能力实际效果、方法与边界 |
-| [docs/MEMORY-ANALYSIS.md](docs/MEMORY-ANALYSIS.md) | **真实进程实测（空间）**：事件树的内存占用、5 处缓存的容量、字节预算的实测效果 |
-| [docs/HARNESS-COMPARISON.md](docs/HARNESS-COMPARISON.md) | 其他 harness 怎么处理长会话，可移植技术清单 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 四类阻塞的定位、各补丁的探测条件与行为、装配契约、如何新增补丁 |
-| [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | 版本矩阵、破坏性变更记录、版本门禁语义、插件清单规范 |
-| [docs/PUBLISHING.md](docs/PUBLISHING.md) | 发布流程与约定 |
-| [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
+| 文档 | 读者 | 内容 |
+|---|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 维护者 | 问题分类、各能力的探测与实现、装配契约、如何新增能力 |
+| [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md) | 维护者 | 时间/空间两维度的实测数据、测量边界、已移除能力的记录 |
+| [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | 维护者 | 版本矩阵、0.2.2 的五处破坏性变更、插件清单规范 |
+| [docs/HARNESS-COMPARISON.md](docs/HARNESS-COMPARISON.md) | 参考 | 其他 coding agent harness 怎么处理长会话 |
+| [docs/PUBLISHING.md](docs/PUBLISHING.md) | 发布者 | 发布流程与约定 |
+| [CHANGELOG.md](CHANGELOG.md) | — | 版本变更记录 |

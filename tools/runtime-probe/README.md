@@ -3,7 +3,7 @@
 在**隔离的 dsh home** 里起一个真实 dsh 实例，用 HTTP RPC 驱动真实链路，测量
 `dsh-large-proj-perf` 各能力是否真的生效、值多少。
 
-结果见 [`docs/RUNTIME-ANALYSIS.md`](../../docs/RUNTIME-ANALYSIS.md)。
+结果见 [`docs/MEASUREMENTS.md`](../../docs/MEASUREMENTS.md)。
 
 ## 为什么需要它
 

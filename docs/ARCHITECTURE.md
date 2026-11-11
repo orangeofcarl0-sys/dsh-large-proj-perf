@@ -2,158 +2,299 @@
 
 > **验证边界**：本文对 dsh 内部实现的描述以 **dsh 0.2.2-rc.1** 为准。dsh 每升一个
 > 版本，文中的方法名与结构都可能变化——升级后请以 `tests/verify_compat.mjs` 的
-> 断言结果和实际启动日志为准，不要默认本文仍然成立。
+> 断言结果和实际 `stats.get` 为准，不要默认本文仍然成立。
 
-本文面向维护者：说明每个补丁针对的具体阻塞点、如何探测宿主结构、装上之后改变了
-什么，以及探测失败时会发生什么。
+本文面向维护者：说明每个能力针对的具体阻塞点、如何探测宿主结构、装上之后改变了
+什么、探测失败时会发生什么，以及如何新增一个能力。
 
-## 四类阻塞
+性能数字见 [MEASUREMENTS.md](MEASUREMENTS.md)；版本矩阵见
+[COMPATIBILITY.md](COMPATIBILITY.md)。
 
-`lib/index.js` 的模块头把它们编号为 A/B/C/D：
+## 1. 问题分类
 
-| 类别 | 环节 | 症状 |
+大会话的代价可以分成三侧：
+
+| 侧 | 环节 | 症状 |
 |---|---|---|
-| **A. fork 深拷贝** | `Session` 构造器逐事件 `snapshotJsonValue`；旧版 persistence 的 `initFor` 还会 `structuredClone(seed)` | fork 一个大会话要把全部事件深拷贝一遍 |
-| **B. 投影冷折叠** | `cellFor()` 首次读取时同步 `buildCell` 全量折叠整个日志 | 打开历史大会话时主线程被占满 |
-| **C. 落盘全量序列化** | `encodeMaterialization` 把整个 seed 拼成一个字符串 | 事件量极大时单个字符串超出 V8 上限 |
-| **D. 冷会话内存驻留** | 准备缓存保留多份完整冷会话事件树 | 多份叠加触发 OOM |
+| **写入** | `Session` 构造时逐事件 `snapshotJsonValue` + `deepFreeze`；`encodeMaterialization` 把整个 seed 拼成一个字符串 | fork 与落盘都要复制/序列化全部事件 |
+| **读取** | 打开时把 18 MB zstd 变成内存事件数组；再对 29 个投影单元逐个 `def.apply` 折叠全部事件 | 首次打开 21 秒（实测，见 MEASUREMENTS §1） |
+| **驻留** | 三处事件缓存都按「会话条数」限容，不按字节 | 6 个 18 MB 会话 → 1.2 GB RSS（实测，见 MEASUREMENTS §2） |
 
-A 和 C 在**写入**侧，B 在**读取**侧，D 在**驻留**侧。
+对应的能力：
 
-## 装配契约
+| 侧 | 能力 | 实测效果 |
+|---|---|---|
+| 读取 | `fastTurnOutline` | 冷读 21.2 s → 3.0 s |
+| 驻留 | `memoryBudget` | 稳态 RSS 1324 MB → 690 MB |
+| 写入 | 零拷贝 fork | 直测 -16% ~ -21%（但 UI 不走这条路） |
+| 写入 | `chunkedMaterialize` | 帧数 2 → 6，字节不变 |
+| 读取 | `coldWriteBack` | 无耗时收益，默认关 |
 
-理解补丁的前提是理解编排层如何把它们接起来（`lib/index.js`）。
+## 2. 装配契约：`deps` 与 `runtime`
 
-`apply(ctx)` 构造一个共享对象 `pc`，传给每个补丁的 `install(pc, ictx?)`：
+所有模块的入口是 `install(deps)` 或 `createXxx(deps)`。`deps` 由
+`lib/context.js` 的 `createDeps()` 构造，**构造时全部就绪且 `Object.freeze`**：
 
 ```js
-const pc = {
-  ctx, config, stats, log, logErr, disposers,
-  safeGet, sessionEventsOf, sessionLogOffset,   // 读宿主的工具函数
-  yieldLoop, setPatchStatus, recordFork, recordWarm, setConfigValue,
-}
+// lib/context.js
+createDeps({ ctx, config, stats, log, logErr, disposers,
+             safeGet, sessionEventsOf, sessionLogOffset,
+             cacheIdentityOf, yieldLoop, setConfigValue,
+             setPatchStatus, recordFork })
 ```
 
 约定：
 
-- **`disposers`**：补丁把自己需要的还原动作 push 进来，`apply` 返回的函数按**逆序**
-  执行，并逐个 try-catch。
+- **`disposers`**：模块把还原动作 push 进来，`apply` 返回的函数按**逆序**执行并逐个
+  try-catch。
 - **`setPatchStatus(key, status)`**：写入 `stats.patches[key]`，这是 `stats.get` 里
   `patches` 字段的唯一来源。
 - **`safeGet(ctx, name)`**：包一层 try。cordis 下取不存在的服务会抛，直接 `ctx.get`
   会让整个 `apply` 中断。
-- **懒装配**：`sessionPersistence` 与 `webServer` 不是启动即就绪的服务。`apply` 用
-  `ctx.inject(['sessionPersistence'], cb)` 等它出现后再装持久化侧补丁，用
-  `ctx.inject(['webServer'], cb)` 装 HTTP 端点。这就是为什么 `installFastInitFor` /
-  `installPreparedCacheTrim` / `installChunkedMaterialize` 接收 `ictx`（子上下文），
-  而 `installZeroCopyFork` 直接用根 `ctx`（`sessions` 在 `inject` 里已声明为必需）。
+- **懒装配**：`sessionPersistence` / `webServer` / `sessionProjections` /
+  `sessionQuery` / `sessionProjectionCache` 都不是启动即就绪的。`apply` 用
+  `ctx.inject([...], cb)` 等它们出现；回调里把 `deps.ctx` 换成子上下文
+  （`withCtx(deps, sub)`），其余字段原样复用。
 
-## 四个补丁
+### `runtime`：为什么需要第二级
+
+`deps` 是只读的，但有一类东西**在装配时还不存在**：`backfill` 句柄由
+`index.js` 在 `setTimeout` 之后创建，而 `api.js` 的 `config.set` 要用它判断
+「启动定时器是否已触发」。
+
+如果 `api.js` 在 `installApi` 时解构它，拿到的是 `undefined` 且永不更新——这正是
+v1.9.0 及之前的一个真实 bug：**打开 `backfillOnBoot` 不会补跑扫描**。
+（`installApi` 走 `ctx.inject(['webServer'])`，webServer 早于 backfill 创建。）
+
+所以分成两级：
+
+| 对象 | 何时就绪 | 谁能用 | 用法 |
+|---|---|---|---|
+| `deps` | 构造时 | 所有模块 | 直接解构 |
+| `runtime` | 运行期逐步登记 | **只有 `api.js`** | **每次用时** `runtime.backfill.get()` |
+
+**新增模块时只拿 `deps`。** 如果确实需要晚绑定的东西，说明它依赖了运行期才出现的
+状态——把该状态登记进 `runtime`，并在使用时取值，绝不在装配时解构。
+
+## 3. 四个补丁
 
 每个补丁遵循同一套模式：**探测 → 安装 → 失败即跳过并上报状态**。没有任何补丁会在
-特征不符时强行 patch。
+特征不符时强行 patch。方法替换统一走 `lib/patch-target.js` 的 `wrapMethod`
+（见 §5）。
 
-### 1. 零拷贝 fork（问题 A）
+### 3.1 零拷贝 fork
 
-- **patch 什么**：`SessionStore.prototype.fork`。
-- **为什么能省**：fork 的 seed 来自 live 会话的 `snapshotEvents()`，这些事件在 append
-  时已被 `deepFreeze`。原生 fork 会把它们重新深拷贝一遍；补丁改走 fromRestore 通道，
-  直接复用这些不可变对象的引用。
-- **探测条件**（按优先级，`lib/patches/zero-copy-fork.js`）：
+**patch 什么**：`SessionStore.prototype.fork(source, boundary, childSessionId)`。
 
-  | 协议标签（日志原样输出） | 判定条件 |
-  |---|---|
-  | `0.1.7 forkSeed` | `dsh-session` 导出 `buildForkSeed`，且原型上有 `_forkBoundary`、`_resolveForkSource`、`create` |
-  | `0.1.3 eventState` | 无 `buildForkSeed`，但有 `create`、`_forkSeed`，且 `prepare` 源码含 `eventState` |
-  | `alpha.5 seedSource` | 上述都不成立，但 `prepare` 源码含 `seedSource` 与 `persistence` |
-  | `unknown` | 全不成立 → 不安装补丁 |
+**为什么能省**：原生 fork 把源会话的事件逐个 `snapshotJsonValue` 深拷贝再
+`deepFreeze`。但 live 事件在 append 时已 `deepFreeze`，可以走 `SessionStore` 的
+`eventState: 'shared-frozen'` 通道（`Session.fromRestore`）直接复用引用。
 
-- **装上之后**：用原生 helper 构造 seed（`buildForkSeed` 新建的 marker 与 turn 闭合
-  事件未冻结，补丁原地补齐冻结），然后走 `create(id, { seed, eventState: 'shared-frozen' })`。
-- **与原生行为对齐**：`parentSession` 是否写入子会话 header 取决于原生 fork 是否写。
-  0.1.7–0.2.1 原生会写，0.2.2 起不写。补丁按 `String(originalFork)` 探测
-  （`nativeSetsParentSession`），两代都产出与原生一致的 header——否则同一 dsh 版本
-  上「走零拷贝」与「回退原生」的 header 会不同。
-- **失败时**：`catch` 里回退调用原生 `fork`，并把该次 fork 记为
-  `path: 'native-fallback'`（计入 `stats.fallbacks`）。服务缺失时直接跳过，状态
-  `inactive`。
+**探测条件**（三协议，按优先序自动选择）：
 
-### 2. 分片投影预热 —— **v1.10.0 已移除**
+| 标签（日志原样输出） | 依据 |
+|---|---|
+| `0.1.7 forkSeed` | 模块导出 `buildForkSeed` + 原型有 `_forkBoundary` / `_resolveForkSource` |
+| `0.1.3 eventState` | 原型有 `_forkSeed` + `prepare` 源码含 `eventState` |
+| `alpha.5 seedSource` | `prepare` 源码含 `seedSource` 与 `persistence` |
+| `unknown` | 都不匹配——补丁仍装上，但每次 fork 走 `capable=false` 分支 |
 
-该能力在 dsh 0.2.2 上恒 `alreadyHot`：`dsh-api-session-controller` 在
-`session/created` 的同步广播里就调 `snapshot()` → `cellFor()` → `buildCell()`
-把全部投影 cell 建满了，插件的监听器注册更晚，轮到它时没有可折的单元。
+**与原生对齐**：0.2.2 起原生 fork 不再给子会话写 `parentSession`，补丁必须与同版本
+原生行为一致。实现按原生源码探测 `nativeSetsParentSession`，两代都对。
 
-完整实测与根因见 [RUNTIME-ANALYSIS.md](RUNTIME-ANALYSIS.md) 场景 C。保留这一节
-是为了让后来者知道「这里曾经有过什么、为什么去掉」，避免重复投入。
+**探测失败**：`SessionStore.fork` 不存在 → `inactive`；`sessions` 服务缺失 →
+`inactive`；运行期抛错 → 打日志并回退原生（计入 `stats.fallbacks`）。
 
-它留下的两个硬性知识仍然有效，任何「自己折投影」的实现都必须遵守：
+**已知局限**：dsh 0.2.2 的服务端 `session/fork` RPC 不再调用这个方法，改为自建
+`buildForkSeed` 后走 `agents.create({seed})`。所以本补丁在 Web UI 的分支会话链路上
+**从未被调用**（实测 `stats.forks = 0`）。直测（`debugApi` 暴露的 `debug.fork`）
+仍有 -16% ~ -21% 的收益。
 
-- **cell 形状必须与上游 `buildCell` 一致**：`{ state, observedSeq, views: [undefined, undefined] }`。
-  缺 `views` 会让下一条事件经 `drive()` 时抛 `TypeError`。
-- **初始化必须调用 `def.init(header, inheritedEventCount)`**。无参调用会让所有从
-  header 取值的投影（`agentPreset`、`workingDirectory`、`agentTeam` 等）抛错。
+### 3.2 分片 materialize
 
-### 3. 分片 materialize（问题 C）
+**patch 什么**：`persistence.encodeMaterialization(...)`。
 
-- **patch 什么**：`sessionPersistence.encodeMaterialization(meta, inheritedEventCount, events)`。
-- **为什么能省**：上游把整个 `events` 拼成一个 body 字符串再压成一个 zstd frame；
-  事件量大时这个字符串本身就超限。补丁改成每 `materializeChunkEvents` 个事件一个
-  frame。多帧是解码端 `scanZstdFrames` 已支持的格式，字节兼容。
-- **探测条件**：源码含 `encodeMaterialization(meta, inheritedEventCount, events)` 与
-  `const body = eventLines(events)`（新形态），或含 `eventLines(events, this.packChunks)`
-  与 `compressZstdFrame`（旧形态）。都不匹配即 `inactive`。
-- **头帧**：新形态直接调用原方法并传空事件数组（`await original(meta, inheritedEventCount, [])`
-  ——上游在 `events.length === 0` 时只产 header 帧），不重写编码器。旧形态则按 alpha.5
-  的 `toHeaderLine` 复刻。
-- **还原**：dispose 时按原形状还原——原型方法就 `delete` 自有属性回落，自有属性
-  （测试 mock）则写回原值。
+**为什么能省**：上游把整个 `events` 拼成一个 body 字符串再压成一个 zstd frame。
+事件量极大时单个字符串会触及 V8 上限（`RangeError`）。补丁改成每
+`materializeChunkEvents` 个事件一个 frame——多帧是解码端 `scanZstdFrames` 的
+原生格式，字节兼容。
 
-### 4. 冷会话 LRU 裁剪（问题 D）
+**形态探测**：
 
-- **patch 什么**：`sessionPersistence.coordinator.preparations.capacity`。
-- **为什么能省**：把容量从官方默认降到 `preparedCacheSize`（默认 1）并主动淘汰最旧的
-  ready 条目。
-- **探测条件**：`persistence.coordinator.preparations.entries` 存在。0.1.3 起上游移除了
-  `PersistenceCoordinator`，因此该补丁在新版上恒为 `inactive`——这是预期行为，不是故障。
-- **`config.set`**：改 `preparedCacheSize` 会重跑裁剪；dispose 恢复原 capacity（已淘汰
-  的条目不复活）。
+| 形态 | 签名特征 |
+|---|---|
+| 0.1.3+（`isNew`） | `encodeMaterialization(meta, inheritedEventCount, events)` + `const body = eventLines(events)` |
+| legacy | `eventLines(events, this.packChunks)` + `compressZstdFrame` |
 
-### 5. fast initFor（问题 A 的 persistence 侧）
+0.1.3 分支的头帧直接复用原方法（`events.length === 0` 时只产 header 帧，编码器归
+上游），不重写。
 
-- **patch 什么**：旧版 `coordinator.initFor` 里的 `structuredClone(seed)`。
-- **探测条件**：`coordinator.initFor` 源码含 `structuredClone(e)`。
-- **退役**：源码含 `const seed = session.events` 或 `session.snapshotEvents()` 说明上游
-  已原生零拷贝，补丁置 `retired` 并跳过。这是本插件唯一会走到 `retired` 的补丁。
+**探测失败**：方法不存在 → `inactive`；签名不匹配 → 打 `signature mismatch` 日志 +
+`inactive`。
 
-## 运行时检查（不是补丁）
+**实测边界**：只改变帧数（2 → 6），不改变字节总数与耗时。它解决的是内存峰值与
+`RangeError`，不是吞吐。
 
-heap 上限检查写在 `lib/index.js` 里，不 patch 任何方法，也不进 `stats.patches`：
+### 3.3 turnOutline 折叠加速
 
-- 读 `v8.getHeapStatistics().heap_size_limit`，低于 `heapWarnBytes`（默认 6 GiB）时
-  打 WARNING，并给出 `--max-old-space-size` 的具体建议。
-- 不会尝试修改上限——那是启动期参数。
+**patch 什么**：`registry.registrations.get('turnOutline').def.apply` 与 `.def.init`。
 
-## 加载侧：上游已做的与插件补的
+**为什么能省**：上游 `apply` 每次 `turn/start` 执行 `turns: [...state.turns, next]`、
+每次 `user/message` / `turn/end` 执行 `turns: [...state.turns.slice(0, -1), fixed]`
+——整数组复制，N 个 turn 是 O(N²)。实测 2 万 turn 时比线性实现慢 701 倍，占整个
+冷读的 76%。
 
-长会话「打开」的成本分四段：
+**语义等价的硬要求**：这是替换投影语义，任何一个字段与上游不同都会让同一会话在
+不同路径下渲染出不同 outline，并把差异写进缓存行。三层保证：
 
-| 阶段 | 上游现状（0.2.2-rc.1） | 插件是否介入 |
-|---|---|---|
-| 磁盘解码 | 增量扫描 + 逐帧 zstd 解码，按 `ZSTD_DECODE_YIELD_INTERVAL_MS`（500ms）让出 | 否（实测只占 1.65 s） |
-| 历史格式迁移 | **主线程** `decodeStreamingMigration`，按 `MIGRATION_DECODE_YIELD_INTERVAL_MS`（500ms）让出；Worker 仅用于 `verifyCurrentGenerationInWorker` **校验**已发布的世代 | 否 |
-| 投影折叠 | `cellFor` 冷时同步全量 `buildCell`；`turnOutline` 的 `apply` 是 O(n²) | **是**：`fastTurnOutline` 把它换成 O(n)，冷读 21.2 s → 3.0 s |
-| 落盘编码 | `encodeMaterialization` 单 body 帧 | **是**：分片 zstd 多帧 |
+1. `preview` 逐字复刻上游（`limit*2` 提前截断、空白压缩、省略号；prompt 50 /
+   response 120）；
+2. fold 逐 case 复刻（turn 号不递增则忽略、只取第一条 user 消息、空白 prompt 不
+   写入、assistant draft 覆盖、`turn/end` 提交）；
+3. **安装前跑运行时等价探针**：15 条覆盖全部分支的合成事件流，分别跑上游 `apply`
+   与我们的 fold，`JSON.stringify` 结果必须相等，否则 `inactive` 并打日志。
 
-注意迁移是主线程完成的，两个 yield 常量也各不相同——不要把「Worker」和「迁移」关联
-起来。
+> 为什么用运行时探针而不是源码特征串：投影注册表把 `definition.apply` 包成了
+> `(state, event) => definition.apply(state, event)`，**拿不到原始源码**。
 
-投影折叠的实测归因见 [RUNTIME-ANALYSIS.md](RUNTIME-ANALYSIS.md) 场景 H：
-29 个单元里 `turnOutline` 一个占 96%，其余 28 个合计 0.67 s。
+另外 `init` 必须返回**新的**可变状态——上游 `init` 返回模块级共享的 `EMPTY_OUTLINE`
+常量，原地改它会污染所有会话。
+
+### 3.4 事件缓存字节预算
+
+**patch 什么**：两处
+
+| 目标 | 手法 |
+|---|---|
+| `sessionQuery._observations.store` | 包装实例方法，每次插入后按估算字节总量淘汰 |
+| `persistence` 原型的 `decodeStoredLog` | 包装原型方法，decompress 完成后裁剪 `coldLogMemo` |
+
+**为什么需要**：上游的淘汰判据只有 `cache.size <= cacheCapacity`——只看条数。实测
+6 个 18 MB 会话 → 1.2 GB RSS。
+
+**估算**：`events.length × 400 B`（实测 365 B/事件，留余量）。目的不是精确，是区分
+「5 个大会话」与「5 个小会话」。
+
+**安全判据**：只删 `refs === 0`（未被 lease 钉住）的条目，与上游
+`evictPastCapacity` 同一判据。全部被 pin 时允许暂时超预算并计入
+`stats.memoryBudgetOverBudget`。
+
+**观测**：`stats.memoryBudget = { budgetBytes, cachedEntries, estimatedBytes }`。
+
+**探测失败**：`sessionQuery._observations.cache` 不可达（上游改了私有字段名）→
+`inactive`，不做任何猜测。
+
+## 4. 非补丁：运行时检查与默认关的能力
+
+### 4.1 heap 上限告警（不是补丁）
+
+`lib/index.js` 在 `apply` 时读一次 `getHeapStatistics().heap_size_limit`，低于
+`heapWarnBytes`（默认 6 GiB）打告警。它不在 `stats.patches` 里——不是补丁，没有
+install / dispose 生命周期。
+
+### 4.2 冷读回写（默认关）
+
+包装 `sessionProjectionCache.hydratePrepared`，冷读后把已折好的状态写成缓存行。
+
+**实测无耗时收益**（有行 19.1 s vs 无行 18.9 s，见 MEASUREMENTS 附录 A.2）。
+保留原因只有一条：让 dsh 自己的列表读（`cachedSnapshot`，零 I/O）看到更新数据。
+默认关，因为每次要写约 10 MB。
+
+### 4.3 冷会话补行（默认关）
+
+`lib/backfill.js`：启动 15 秒后扫描磁盘上的大会话，把缺失或陈旧的投影缓存行补上。
+解码按 zstd frame 逐帧异步 + 帧间让出，折叠按 `chunkSize` 让出。默认关——它仍是
+「读全量日志 + 折全部单元」的重活。
+
+## 5. 补丁基础设施
+
+### 5.1 `wrapMethod`：统一的方法替换样板
+
+`lib/patch-target.js` 提供三个原语：
+
+| 原语 | 作用 |
+|---|---|
+| `resolveMethod(target, name)` | 取原始方法并判断它来自原型还是自有属性 |
+| `wrapMethod(target, name, factory, disposers)` | 替换 + 登记还原 |
+| `sourceOf(target, name)` | 取「真实源码」用于特征校验 |
+
+**还原语义**（这是三处补丁此前若不一致就会出错的地方）：
+
+- 原始方法来自**原型**（真实 dsh 服务）→ `delete` 自有属性，让方法回落原型。
+  不 delete 会在实例上留副本，遮蔽原型，上游热更新失效。
+- 原始方法是**自有属性**（测试 mock、自定义后端）→ 写回原函数。
+
+`sourceOf` 处理的是 cordis 的 Proxy：`ctx.get(name)` 返回的方法被 bind 过，
+`String()` 得到 `function () { [native code] }`，特征校验会永远失败。必须沿原型链
+取未 bind 的那一份。
+
+### 5.2 三层回退
+
+任一层不满足都不会破坏上游行为：
+
+1. **能力探测**——依赖的方法/导出不存在就跳过；
+2. **源码特征校验**（或运行时等价探针）——不匹配就跳过，状态置 `inactive`；
+3. **运行时兜底**——补丁抛错时回退原实现（零拷贝 fork 计入 `stats.fallbacks`）。
+
+### 5.3 补丁状态
+
+`stats.patches[key]` 的取值：
+
+| 值 | 含义 |
+|---|---|
+| `active` | 已安装（**不代表本轮被调用**） |
+| `inactive` | 环境缺失 / 特征漂移，自动跳过 |
+| `off` | 被配置显式关闭 |
+| `retired` | 上游已原生实现该能力，补丁主动退役 |
+
+**`retired` 当前没有使用者**：v1.10.0 移除了唯一会设置它的 `fastInitFor`。保留这个
+值是因为它是「上游吸收能力后补丁让位」这一语义的唯一表达；如果长期无人使用，可以在
+未来的大版本里删掉。
+
+## 6. 如何新增一个能力
+
+1. 在 `lib/` 建模块，导出 `install(deps)` 或 `createXxx(deps)`。
+2. 开头读 `deps.config.<你的开关>`，关闭时 `setPatchStatus(key, 'off')` 后 return。
+3. 取服务用 `deps.safeGet(deps.ctx, name)`，不要直接 `ctx.get`。
+4. 需要替换方法时用 `wrapMethod`，不要手写「判断自身属性 + 替换 + 还原」。
+5. 特征校验用 `sourceOf`；如果拿不到原始源码（例如被包装了一层），改用运行时
+   等价探针——参考 `fast-turn-outline.js` 的 `buildEquivalenceProbe`。
+6. 每一条「跳过」分支都要 `setPatchStatus(key, 'inactive')` 并打日志说明原因。
+   静默跳过是最难排查的故障。
+7. 新配置键进 `lib/config.js` 的 `DEFAULT_CONFIG`；数值项同时进 `CONFIG_MIN`
+   （防止 `0` 或负数导致死循环 / 清空缓存）。
+8. 测试：`tests/verify_compat.mjs` 加宿主特征断言（上游结构还在吗），
+   `tests/e2e_real_components.mjs` 加行为断言（装上后行为对吗），
+   必要时新增独立套件（逻辑/边界）。跑 `npm test` 并把断言数记进 CHANGELOG。
+9. 如果能在真实进程里测出数字，写进 [MEASUREMENTS.md](MEASUREMENTS.md) 并标明
+   测量条件与边界。
+
+## 7. 代码结构
+
+```
+lib/index.js              编排层：版本探针/补丁装配/定时器/生命周期
+lib/context.js            装配契约：deps（冻结、只读）与 runtime（晚绑定槽）
+lib/runtime.js            dsh 兼容垫片：日志、safeGet、sessionEventsOf、版本探针
+lib/yield.js              分片遍历之间的让出原语
+lib/constants.js          跨模块共享的具名常量
+lib/config.js             默认值、下限钳制、settings 注册、环境变量覆盖
+lib/stats.js              统计与补丁生命周期状态
+lib/api.js                HTTP 端点（回环 + 同源校验）
+lib/cache-identity.js     投影缓存行 identity 的唯一构造器
+lib/patch-target.js       方法替换样板：resolveMethod / wrapMethod / sourceOf
+lib/patches/zero-copy-fork.js      零拷贝 fork
+lib/patches/chunked-materialize.js 分片 materialize
+lib/fast-turn-outline.js           turnOutline 折叠加速
+lib/memory-budget.js               事件缓存字节预算
+lib/backfill.js                    磁盘冷会话补行（默认关）
+lib/cold-writeback.js              冷读回写（默认关）
+tests/                    不随 npm 包发布
+tools/                    开发者脚本，不随包发布
+```
 
 ### 投影缓存行的 identity 契约
 
-插件读写缓存行时必须与上游 `identityOf` 构造同一个键。真实形状
+读写缓存行时必须与上游 `identityOf` 构造同一个键。真实形状
 （`dsh-session-projection-cache`）：
 
 ```js
@@ -168,94 +309,23 @@ heap 上限检查写在 `lib/index.js` 里，不 patch 任何方法，也不进 
 { ..., inheritedEventCount: SessionLogOffset(inheritedEventCount) }
 ```
 
-两个易错点：`formatVersion` 缺失或不等时上游**不会**把它当折叠短路（只能当 title
-前驱提示）；`cwd` 是全有或全无，不能写成 `cwd: undefined`。`lib/cache-identity.js`
-是唯一构造器（v1.10.0 起），`backfill.js` 与 `cold-writeback.js` 都用它，并有回归
-断言。
+三个陷阱：`formatVersion` 必须在首位（字段顺序无关但语义上它是格式代的第一 witness）；
+`cwd` 缺失时必须**整键省略**，不能写成 `cwd: undefined`；`isSeeded` 是**无条件**写入
+（缺失按 `false`）。
 
-## 安全性与回退
+`lib/cache-identity.js` 是唯一构造器（v1.10.0 起），`backfill.js` 与
+`cold-writeback.js` 都用它——此前两处各抄一份，字段一漂移行就永久失配且静默回退全量
+重折。
 
-**共享冻结引用不改变语义**：事件进入源会话时已完整校验并 `deepFreeze`，fork 的 seed
-只是复用这些不可变对象，与深拷贝等价。
-
-三层回退，任一层不满足都不会破坏上游行为：
-
-1. **能力探测**——依赖的方法/导出不存在就跳过；
-2. **源码特征校验**——`String(原型方法)` 不含特征字面量就跳过，日志打
-   `signature mismatch`，状态置 `inactive`；
-3. **运行时兜底**——零拷贝 fork 抛错时回退原生实现，计入 `stats.fallbacks`。
-
-所有补丁都在 dispose 时还原。**还原语义已统一到 `lib/patch-target.js` 的
-`wrapMethod`**（v1.10.0）：原始方法来自原型 → `delete` 自有属性让方法回落原型；
-原始方法是自有属性（测试 mock / 自定义后端）→ 写回原函数。此前三处各写一遍且
-`fast-init-for` 直接 `delete` 不保留原值，是这套样板漂移的证据。
-
-## 装配契约：`deps` 与 `runtime`
-
-v1.10.0 起，模块不再共用一个 `pc` 对象，而是分两级（见 `lib/context.js`）：
-
-| 对象 | 何时就绪 | 谁能用 | 用途 |
-|---|---|---|---|
-| `deps` | 构造时全部就绪，**冻结** | 所有模块 | 服务、配置、日志、工具函数 |
-| `runtime` | 运行期逐步登记 | **只有 `api.js`** | 晚绑定槽（目前只有 `backfill`） |
-
-**为什么必须分开**：`api.js` 原先在 `installApi` 时解构 `backfill` 与
-`retrimPreparedCache`，但这两个值是别的模块在装配**之后**写的。`installApi` 走
-`ctx.inject(['webServer'])` 懒装配（webServer 早于 sessionPersistence 就绪），
-解构到的是 `undefined` 且永不更新——导致「打开 `backfillOnBoot` 不补跑扫描」
-这个真实 bug。现在 `api.js` 通过 `runtime.backfill.get()` **在每次请求时**取值。
-
-**新增模块时**：只拿 `deps`。如果确实需要晚绑定的东西，说明它依赖了运行期才出现的
-状态，应把该状态登记进 `runtime` 并在**使用时**取值，绝不在装配时解构。
-
-## 如何新增一个补丁
-
-1. 在 `lib/patches/` 建模块，导出 `install(deps)`。
-2. 开头读 `deps.config.<你的开关>`，关闭时 `setPatchStatus(key, 'off')` 后 return。
-3. 取服务用 `deps.safeGet(deps.ctx, name)`，不要直接 `ctx.get`（对缺失服务可能抛错）。
-4. 需要替换方法时用 `lib/patch-target.js` 的 `wrapMethod(target, name, factory, disposers)`，
-   不要手写「判断自身属性 + 替换 + 还原」那套。
-5. 特征校验用同文件的 `sourceOf(target, name)`；cordis 的 Proxy 会把实例方法包成
-   `[native code]`，直接 `String(instance.method)` 会永远失败。
-6. 每一条「跳过」分支都要 `setPatchStatus(key, 'inactive')` 并打日志说明原因——静默
-   跳过是最难排查的故障。
-7. 在 `lib/config.js` 加开关与默认值（数值项同时进 `CONFIG_MIN`），
-   在 `tests/verify_compat.mjs` 加宿主特征断言，在
-   `tests/e2e_real_components.mjs` 加行为断言。
-
-## 代码结构
-
-```
-lib/index.js            编排层：版本探针/补丁装配/定时器/生命周期
-lib/context.js          装配契约：deps（冻结、只读）与 runtime（晚绑定槽）
-lib/runtime.js          dsh 兼容垫片：日志、safeGet、sessionEventsOf、版本探针
-lib/config.js           默认值、下限钳制、settings schema 注册、环境变量覆盖
-lib/constants.js        跨模块共享的具名常量（延迟、上限、字节估算）
-lib/yield.js            分片遍历之间的让出原语
-lib/stats.js            统计与补丁生命周期状态
-lib/api.js              stats/config HTTP 端点（回环 + 同源校验）
-lib/cache-identity.js   投影缓存行 identity 的唯一构造器
-lib/backfill.js         磁盘冷会话补行（逐帧异步解码 + 分片折叠，默认关）
-lib/cold-writeback.js   冷读后回写投影缓存行（默认关）
-lib/fast-turn-outline.js  把 turnOutline 的 O(n²) fold 换成 O(n)
-lib/memory-budget.js    事件缓存按字节限容
-lib/patch-target.js     方法替换样板：resolveMethod / wrapMethod / sourceOf
-lib/patches/*.js        两个补丁（零拷贝 fork、分片 materialize）
-tests/                  不随 npm 包发布；见 README「开发」
-tools/                  开发者脚本，不随包发布
-```
-
-## 依赖声明
-
-两个包容易混淆，按官方惯例区分：
+## 8. 依赖声明
 
 | 包 | 声明位置 | 理由 |
 |---|---|---|
-| `@deepseek-ai/cordis` | `peerDependencies`（`~4.1.0`） | 宿主提供的单例运行时。官方 `dsh-app-boot`、`dsh-web-app`、`dsh-session-projection`、`dsh-plugin-manager` 等全部这样声明。`lib/` 不 import 它并不意味着可以省略——它是插件所处的运行时契约 |
+| `@deepseek-ai/cordis` | `peerDependencies`（`~4.1.0`） | 宿主提供的单例运行时。官方 `dsh-app-boot` / `dsh-web-app` / `dsh-session-projection` / `dsh-plugin-manager` 全部这样声明。`lib/` 不 import 它并不意味着可以省略——它是插件所处的运行时契约 |
 | `@deepseek-ai/schemastery` | `dependencies`（`^3.19.0`） | `lib/config.js` 顶层 `await import()` 的普通运行时依赖。官方 `dsh-plugin-manager` 同样放在 `dependencies` |
 
-`schemastery` 漏声明时的后果不是崩溃，而是**静默降级**：`config.js` 里的
+`schemastery` 漏声明时的后果不是崩溃，而是**静默降级**：`config.js` 里
 `try { schemaLib = await import(...) } catch { schemaLib = null }` 会吞掉失败，
-`registerSettings` 见 `schemaLib` 为空就直接 return——配置仍按默认值生效，但不再
-经 settings 持久化。用户改了配置却发现重启后丢失，是最难排查的一类问题。
-`tests/verify_compat.mjs` 有两条断言锁住这两个声明。
+`registerSettings` 见 `schemaLib` 为空就直接 return——配置仍按默认值生效，但不再经
+settings 持久化。用户改了配置却发现重启后丢失，是最难排查的一类问题。
+`tests/verify_compat.mjs` 有断言锁住这两个声明。

@@ -3,7 +3,7 @@
 本文横向对比主流 coding agent harness 的会话存储与打开策略，用于判断 dsh 的
 瓶颈是"架构必然而非实现缺陷"，以及哪些技术可以移植。
 
-配套阅读：[RUNTIME-ANALYSIS.md](RUNTIME-ANALYSIS.md)（dsh 自己的实测数据）。
+配套阅读：[MEASUREMENTS.md](MEASUREMENTS.md)（dsh 自己的实测数据）。
 
 ## 先给对照基线
 

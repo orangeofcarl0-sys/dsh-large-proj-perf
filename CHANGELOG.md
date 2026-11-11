@@ -9,6 +9,60 @@
 
 ## [Unreleased]
 
+## [1.10.1] — 2026-11-11
+
+文档全面重写。不是功能版本，但修掉了多处会让读者得出错误结论的文档缺陷。
+
+### Changed
+
+- **两份实测文档合并为 [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md)**：原先
+  `RUNTIME-ANALYSIS.md`（484 行）+ `MEMORY-ANALYSIS.md`（186 行）共 670 行，其中
+  89 行是已删除的分片预热能力、50 行是被 v1.8 推翻的 v1.7 方案。合并后 346 行，
+  分「时间」「空间」两大部分，**只保留对当前代码有指导意义的实测**；已删能力与
+  被放弃的方向压成四个附录——保留它们的价值在于「我们试过了，这条路走不通」与
+  「我们没试过」是两种不同的信息。
+- **`README.md` 重写**：配置表按**重要性重排**（主力能力在前，调优项在后，不再是
+  按功能分组的等权列表）；删除已失效的启动日志样例（日志在默认配置下不可见）；
+  新增「`stats.get` 怎么读」小节，给出「想知道 X 就看 Y」的对照表。
+- **`docs/ARCHITECTURE.md` 重写**（261 → 331 行）：问题分类从「A/B/C/D 四类」改为
+  「写入 / 读取 / 驻留 三侧」——原来的四类里有两类（fork 深拷贝、`initFor`）都属
+  写入侧，另有一类（LRU 裁剪）已删除。新增 §5「补丁基础设施」（`wrapMethod` 的还原
+  语义、`sourceOf` 为什么要跳过 Proxy、三层回退、`retired` 状态当前无使用者）。
+
+### Fixed
+
+- **`docs/ARCHITECTURE.md` 标题写「四个补丁」但列了 5 节**，其中 3 节是已删除的
+  能力（分片预热 / LRU 裁剪 / fast initFor）。重写后只有 4 个真实补丁，且默认关的
+  两个能力（冷读回写、冷会话补行）明确归入「非补丁」小节。
+- **`docs/ARCHITECTURE.md` 有两处「装配契约」章节**，前者整节都在描述 v1.10.0 已
+  废弃的共享 `pc` 对象。合并为 §2 一节。
+- **`README.md` 写「全套 8 套件」**，实际是 10 个、206 条断言。
+- **`docs/COMPATIBILITY.md` 的版本矩阵说「0.2.2-rc.1 四处收紧」**，而同文件下一节
+  标题是「五处变更」（第 5 条 `session/fork` 改道是 v1.6 补的，矩阵没同步）。
+- **`docs/COMPATIBILITY.md` 两处仍用 `KNOWN_runtime_VERSIONS`**（真实常量名是
+  `KNOWN_DSH_VERSIONS`）。
+- CHANGELOG 里指向 `docs/RUNTIME-ANALYSIS.md` 的链接（该文件已合并删除）。
+
+### 新增的验证
+
+文档里的每个数字现在都能追溯到代码或实测：
+
+| 断言 | 验证方式 |
+|---|---|
+| README 配置表 17 键与默认值 | 脚本比对 `DEFAULT_CONFIG`，missing/extra/mismatch 全为 0 |
+| `stats.patches` 有 5 项 | 真实进程 `stats.get` 返回 5 项 |
+| `stats.memoryBudget` 存在 | 同上 |
+| 冷读 ~3.0 s | 同上，实测 2990 ms |
+| 配置键 17 个 | 同上，`config.get` 返回 17 键 |
+| 「插件日志默认不可见」 | 真实进程启动日志里 `dsh-perf` 行数为 **0**，而插件工作正常 |
+| 全部 markdown 相对链接 | 脚本检查，0 dead |
+
+### 关于 `retired` 状态
+
+v1.10.0 的 CHANGELOG 说「保留该状态是因为未来某个补丁退役时还要用」。重写文档时
+核实：**当前没有任何代码路径会设置它**。已在 ARCHITECTURE §5.3 写明这一点，并注明
+「如果长期无人使用，可以在未来的大版本里删掉」——不再把它当作已有功能的描述。
+
 ## [1.10.0] — 2026-11-11
 
 **结构调整版。没有新增优化能力，只做减法与去重——并修掉一个藏了两轮的 bug。**
@@ -302,7 +356,7 @@ dsh 有 **5 处**会持有完整事件数组 / 整棵事件树，其中 3 处按
 home 里起真实 dsh 0.2.2-rc.1，用 HTTP RPC 驱动真实链路，测出两个此前未知的
 失效，并修正了文档里多处过度宣称。
 
-完整数据、方法与测量边界见新文档 [`docs/RUNTIME-ANALYSIS.md`](docs/RUNTIME-ANALYSIS.md)。
+完整数据、方法与测量边界见新文档 [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md)。
 
 ### Added
 

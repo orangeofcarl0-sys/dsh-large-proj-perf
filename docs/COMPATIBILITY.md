@@ -35,7 +35,7 @@
 | 0.2.0-rc.2 | 插件管理引入严格 peer 门禁；`dsh-session` 重构 tail-repair 并新增 `ToolCallRecovery`（`buildForkSeed` / `SESSION_FORMAT_VERSION` 导出不变）；`llm-deepseek` 拆分为 `-api-key` / `-account` |
 | 0.2.1-rc.1 | 门禁新增 `engines.dsh` 且**独占生效**；jsonl 后端改为 cordis 插件形态（只导出 `name`/`apply`/`Config`）；persistence 改为 `ctx.effect` 生命周期 + `listConcurrency` 限流；投影 `register()` 改为返回 effect |
 | 0.2.1-rc.2 ~ rc.5 | **纯版本刷新**。关键包源码与 rc.1/rc.3 逐字节一致，作用点零影响 |
-| 0.2.2-rc.1 | **四处收紧**（见下节）。这是 0.2.x 线上第一个需要改插件代码的版本 |
+| 0.2.2-rc.1 | **五处变更**（见下节）。这是 0.2.x 线上第一个需要改插件代码的版本 |
 
 **未验证的版本**：`0.1.3` 正式版、`0.1.4`、`0.1.6` 没有实测。它们夹在两个已验证版本
 之间，且相邻版本的 persistence / fork 结构未再变化，预期不构成风险；真遇到时跑
@@ -115,7 +115,7 @@ meta: { cwd, isSeeded: true }
 异步化不影响。`refs === 0` 的语义变化只有「自己折投影」的实现才需要关心——该实现
 （分片预热）已于 v1.10.0 移除，原因见下。
 
-**运行时实测（[RUNTIME-ANALYSIS.md](RUNTIME-ANALYSIS.md) 场景 C）**：
+**运行时实测（[MEASUREMENTS.md](MEASUREMENTS.md) 附录 A.1）**：
 `dsh-api-session-controller` 在 `session/created` 的同步广播里调
 `snapshot(session)`（不带 keys），`cellFor()` 随即对全部 29 个单元执行
 `buildCell()` 一次性折完并写入 `registration.cells`。任何注册更晚的
@@ -152,9 +152,8 @@ await this.ctx.agents.create({
 
 **对本插件：零拷贝 fork 补丁在 UI 链路上失效。** 补丁挂在
 `SessionStore.prototype.fork` 上，而这条 RPC 不调用它。运行时实测
-（[RUNTIME-ANALYSIS.md](RUNTIME-ANALYSIS.md) 场景 D）：真实 fork 后
-`stats.forks = 0`。补丁本身仍可工作（场景 E 用 `debug.fork` 直测：24 万事件
-20.1s → 15.8s），但没有真实调用方。
+（[MEASUREMENTS.md](MEASUREMENTS.md) §1.4）：真实 fork 后
+`stats.forks = 0`。补丁本身仍可工作（§1.4 用 `debug.fork` 直测：24 万事件 20.1s → 15.8s），但没有真实调用方。
 
 注意：把补丁改挂到 `sessions.prepare({seed})` 覆盖这条路径**是负收益**——实测
 会让 fork 从 25.8s 涨到 48.4s（深冻结 24 万事件的开销超过它省下的拷贝）。
