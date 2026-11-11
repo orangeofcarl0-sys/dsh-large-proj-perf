@@ -19,9 +19,10 @@ DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长
 
 | 能力 | 解决什么 | 运行时实测（dsh 0.2.2-rc.1） | 状态 |
 |---|---|---|---|
-| **turnOutline 折叠加速** | `turnOutline` 的 `apply` 每次 turn 整数组复制（O(n²)），30 000 turn 占冷读 16 秒 | **冷读 21.2 s → 3.0 s**（7×）；输出逐字段一致 | **补丁（主力）** |
+| **turnOutline 折叠加速** | `turnOutline` 的 `apply` 每次 turn 整数组复制（O(n²)），30 000 turn 占冷读 16 秒 | **冷读 21.2 s → 3.0 s**（7×）；输出逐字段一致 | **补丁（时间维度主力）** |
+| **事件缓存字节预算** | dsh 的缓存全按「会话条数」限容，不按字节；连开 6 个 18 MB 会话涨 821 MB | **稳态 RSS 1324 MB → 690 MB**（预算 128 MiB） | **补丁（空间维度主力）** |
 | 零拷贝 fork | fork 时逐事件深拷贝整个会话 | **UI 的「分支会话」不走这个补丁点**；直测 24 万事件同进程 A/B 约 -16% ~ -21% | 补丁（部分失效） |
-| 分片投影预热 | 打开历史会话时同步冷折叠冻结事件循环 | **在 0.2.2 上不生效**：上游在 `session/created` 广播里已把 cell 建满，29 个单元全部 `hot` | 补丁（已失效） |
+| 分片投影预热 | 打开历史会话时同步冷折叠冻结事件循环 | **在 0.2.2 上不生效**：上游在 `session/created` 广播里已把 cell 建满 | 补丁（已失效） |
 | 分片 materialize | 落盘时把整个会话序列化成一个巨大字符串 | 生效：24 万事件 2 帧 → 6 帧，字节数不变（差 0.02%） | 补丁 |
 | fork 缓存回填 | fork 子会话没有投影缓存行，重开走全量读 | 依赖预热，预热不触发时不会执行 | 补丁（可达性受限） |
 | 冷读回写 | 冷读后把投影状态写成缓存行 | **实测无耗时收益**（有行 19.1s vs 无行 18.9s） | 补丁（默认关） |
@@ -30,15 +31,16 @@ DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长
 
 > **`stats.patches` 显示 `active` ≠ 在真实链路上被调用。** 零拷贝与预热都是
 > `active`，但一个从未被 UI 调用、一个每轮都静默跳过。判断实际效果要看
-> `stats.zeroCopy` / `stats.warmed` / `stats.alreadyHot` 这些命中计数。
+> `stats.zeroCopy` / `stats.warmed` / `stats.memoryBudgetTrimmed` 这些命中计数。
 >
-> **冷读的真实瓶颈已经定位并修掉。** 分段归因（场景 H）显示：解码 + 解析 +
-> 冻结 + `Session` 构造合计只要 1.4 秒；19 秒花在投影折叠上，其中 **`turnOutline`
-> 一个单元占 16 秒**——它每次 `turn/start` 都整数组复制，30 000 个 turn 是
-> O(n²)（实测 2 万 turn 时比线性实现慢 700 倍）。用 O(N) 等价 fold 替换后
-> 冷读 21.2 s → 3.0 s。
+> **时间维度**（[RUNTIME-ANALYSIS.md](docs/RUNTIME-ANALYSIS.md)）：冷读 21.2 s 里
+> 76% 是 `turnOutline` 一个单元的 O(n²) 折叠（每次 turn 都整数组复制）。用 O(N)
+> 等价 fold 替换后 21.2 s → 3.0 s。
 >
-> 完整测量数据、方法与边界见 [docs/RUNTIME-ANALYSIS.md](docs/RUNTIME-ANALYSIS.md)；
+> **空间维度**（[MEMORY-ANALYSIS.md](docs/MEMORY-ANALYSIS.md)）：18 MB 的会话在
+> 内存里是 87.7 MB 堆对象（约 5 倍），而 dsh 的三处事件缓存都按「会话条数」限容
+> （5 + 2 条），最多可同时驻留 7 份。给它们加字节预算后稳态 RSS 降约一半。
+>
 > 与其他 harness 的横向对比见 [docs/HARNESS-COMPARISON.md](docs/HARNESS-COMPARISON.md)。
 
 「补丁」的实际状态经 `stats.get` 的 `patches` 字段暴露，取值：
@@ -125,6 +127,7 @@ node --max-old-space-size=8192 <dsh 入口> web
 | `debugApi` | `false` | — | 打开后暴露 `debug.fork` 调试端点（仅用于测量） |
 | `coldWriteBack` | `false` | — | 冷读后回写投影缓存行（实测无耗时收益，仅让列表读看到更新数据） |
 | `fastTurnOutline` | `true` | — | 把 `turnOutline` 的 O(n²) 折叠换成 O(n)（冷读 21.2s → 3.0s） |
+| `memoryBudgetBytes` | `536870912` | 字节 | 事件缓存总额上限（512 MiB，约 6 份 24 万事件会话）；`0` 关闭 |
 
 `backfillOnBoot` 默认关闭：它的解码在插件层同步执行，超大文件仍可能短暂冻结事件
 循环，需要时再开。开启后补行任务在启动 **15 秒**后触发，不会立刻执行。
@@ -254,8 +257,9 @@ node tools/runtime-probe/run.mjs --home <隔离 home> --agents <agents home> \
 
 | 文档 | 内容 |
 |---|---|
-| [docs/RUNTIME-ANALYSIS.md](docs/RUNTIME-ANALYSIS.md) | **真实进程实测**：各能力的实际效果、失效原因、方法与边界 |
-| [docs/HARNESS-COMPARISON.md](docs/HARNESS-COMPARISON.md) | 其他 harness 怎么处理长会话（Codex / Claude Code / Gemini / ZCode 等），可移植技术清单 |
+| [docs/RUNTIME-ANALYSIS.md](docs/RUNTIME-ANALYSIS.md) | **真实进程实测（时间）**：冷读 21.2s 的完整归因、各能力实际效果、方法与边界 |
+| [docs/MEMORY-ANALYSIS.md](docs/MEMORY-ANALYSIS.md) | **真实进程实测（空间）**：事件树的内存占用、5 处缓存的容量、字节预算的实测效果 |
+| [docs/HARNESS-COMPARISON.md](docs/HARNESS-COMPARISON.md) | 其他 harness 怎么处理长会话，可移植技术清单 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 四类阻塞的定位、各补丁的探测条件与行为、装配契约、如何新增补丁 |
 | [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | 版本矩阵、破坏性变更记录、版本门禁语义、插件清单规范 |
 | [docs/PUBLISHING.md](docs/PUBLISHING.md) | 发布流程与约定 |

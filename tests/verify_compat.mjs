@@ -290,5 +290,24 @@ check('turnOutline: def.apply is a forwarding wrapper (no raw source available)'
   // 无法用特征串校验——这正是必须用运行时等价探针的原因。
   projSrc.includes('apply: (state, event) => definition.apply(state, event)'))
 
+// ---- 内存预算（v1.9）----
+// 依据：dsh 的事件缓存全部按「会话条数」限容，没有一处按字节。实测一份 24 万
+// 事件树占 87.7 MB，连开 6 个 18 MB 会话 RSS 涨 821 MB。插件给它们加字节预算。
+// 这些断言锁住：两处缓存的可达路径、以及淘汰判据（只删 refs===0）。
+const querySrc = src('dsh-session-query')
+check('memory budget: observation cache reachable via _observations.cache',
+  querySrc.includes('_observations = new SessionObservationReader')
+    && querySrc.includes('cache = /* @__PURE__ */ new Map()'))
+check('memory budget: eviction upstream only counts entries, not bytes',
+  // 上游 evictPastCapacity 的判据是 `cache.size <= cacheCapacity`——正是我们要补的缺口。
+  /evictPastCapacity\(keep\)\s*\{\s*if \(this\.cache\.size <= this\.cacheCapacity\) return/.test(querySrc.replace(/\n\s*/g, ' ')))
+check('memory budget: cold log memo is also entry-count bounded',
+  cacheSrc !== undefined && src('dsh-session-persistence-jsonl').includes('COLD_LOG_MEMO_MAX_ENTRIES = 2'))
+const memBudgetSrc = readFileSync(new URL('../lib/memory-budget.js', import.meta.url), 'utf8')
+check('memory budget: plugin only evicts unpinned entries (refs === 0)',
+  memBudgetSrc.includes('candidate?.refs > 0') && memBudgetSrc.includes('continue'))
+check('memory budget: defaults to 512 MiB, 0 disables',
+  /memoryBudgetBytes:\s*536870912/.test(configSrc) && memBudgetSrc.includes("setPatchStatus('memoryBudget', 'off')"))
+
 console.log(failures === 0 ? (warns > 0 ? `\nALL PASS (${warns} warning(s))` : '\nALL PASS') : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)

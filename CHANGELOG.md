@@ -9,6 +9,73 @@
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-11-11
+
+**空间维度的第一轮：把事件缓存从「按条数限容」改成「按字节限容」。**
+
+### 静态 + 动态分析（`docs/MEMORY-ANALYSIS.md`）
+
+dsh 有 **5 处**会持有完整事件数组 / 整棵事件树，其中 3 处按「会话条数」限容，
+**没有一处按字节**：
+
+| 位置 | 容量 | 按字节 |
+|---|---|---|
+| `SessionObservationReader.cache` | 5 条 | ✗ |
+| `JsonlSessionPersistence.coldLogMemo` | 2 条 | ✗ |
+| `Session.log` + `eventsSnapshot` | 每 live 会话一份 | — |
+| `migrationPreparations` | 任务结束即删 | — |
+| `SessionProjectionCache` rows | 无上限（单行可达 9 MB） | ✗ |
+
+实测一份 24 万事件树：18.1 MB（zstd）→ 73.8 MB（解压文本）→ **87.7 MB（堆对象）**，
+约 **5 倍**膨胀。真实 dsh 进程里：
+
+| 步骤 | RSS |
+|---|---:|
+| 启动后（未读会话） | 388 MB |
+| 读 1 个大会话 | 630 MB（清掉中间产物后 463 MB） |
+| 再读 5 个不同大会话 | **1209 MB** |
+| 读满 12 个 | 1324 MB（5 条上限生效，不再线性涨） |
+
+即 **936 MB 常驻缓存**，而 `D:\dsh` 里真实存在 52 MB 的会话（单份 250 MB+）。
+
+### Added
+
+- **`lib/memory-budget.js`** + `memoryBudgetBytes` 配置键（默认 512 MiB，`0` 关闭）：
+  - 包装 `sessionQuery._observations.store`，每次插入后按估算字节总量淘汰；
+  - 同样处理 `persistence.coldLogMemo`（包装 `decodeStoredLog`）；
+  - 估算用 `events.length × 400 B`（实测 365 B/事件，留余量）；
+  - **只删 `refs === 0` 的条目**（与上游 `evictPastCapacity` 同一判据）；
+    全部被 pin 时允许暂时超预算并计数；
+  - 条数上限保持原样，两者取先触发者。
+- `stats.memoryBudgetTrimmed` / `memoryBudgetFreedBytes` / `memoryBudgetOverBudget`。
+- `tests/test_memory_budget.mjs`（19 断言）：未超预算不动、超预算按字节淘汰到
+  预算内、MRU 保留、最旧先删、pinned 存活、超预算计数、预算 0 关闭、
+  服务缺失不抛、dispose 还原、统计接口。
+- `verify_compat` 新增 5 条断言：两处缓存的可达路径、上游确实只按条数限容、
+  插件只删未 pinned 的条目、默认值与关闭语义。
+
+### 实测效果（预算 128 MiB，8–12 个 18 MB 会话反复读 36 次）
+
+| 配置 | 稳态 RSS |
+|---|---:|
+| 无字节预算（仅 5 条上限） | 1209 – 1324 MB |
+| **字节预算 128 MiB** | **690 MB** |
+
+36 次读累计淘汰 86 个条目 / 7874 MB 估算。GC 运行后 RSS 会掉到 372 MB ——
+说明引用确实解除了，只是 V8 不保证立刻归还 OS。
+
+代价：被淘汰的会话下次打开要重新解码 + 折叠。1.8.0 之后这一步是 3 秒而非 21 秒，
+所以「用重折换内存」现在划算了。
+
+### 明确不做
+
+- **驱逐 live session**：`ctx.sessions` 没有安全接口，强删会破坏 agent 生命周期。
+- **压缩 `Session.log`**：事件树是 `shared-frozen` 且被多处共享引用，替换会破坏
+  identity 语义。
+- **投影缓存行瘦身**：9.14 MB 里 `turnOutline` 占 6.45 MB，但改它要破 wire schema，
+  会改变客户端跳转语义。本轮只在文档里记录这个成本。
+- **空闲时主动驱逐**：属于「按需回收」，比「限容」复杂且需要触发时机，留待后续。
+
 ## [1.8.0] — 2026-11-11
 
 **冷读 21.2 秒 → 3.0 秒（7×）。** 前两轮都在猜瓶颈且猜错；这一轮先做归因，
