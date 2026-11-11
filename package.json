@@ -1,13 +1,13 @@
 {
   "name": "dsh-large-proj-perf",
-  "version": "1.10.1",
+  "version": "1.11.0",
   "description": "DSH 大会话性能插件：turnOutline 折叠加速（冷读 21.2s → 3.0s）+ 事件缓存字节预算（RSS 1324 → 690 MB）+ 分片 materialize + 零拷贝 fork + heap 上限告警",
   "type": "module",
   "main": "lib/index.js",
   "icon": "./icon.svg",
   "engines": {
     "node": ">=22.15.0",
-    "dsh": ">=0.1.0-rc.6 <0.3.0-0"
+    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "publishConfig": {
     "access": "public"
@@ -59,8 +59,8 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
-    "@deepseek-ai/dsh": ">=0.1.0-rc.6 <0.3.0-0",
-    "@deepseek-ai/dsh-session": ">=0.1.0-rc.6 <0.3.0-0"
+    "@deepseek-ai/dsh": ">=0.2.2-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-session": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "dsh": {
     "bundle": {

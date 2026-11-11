@@ -12,16 +12,26 @@
 
 | 概念 | 位置 | 含义 |
 |---|---|---|
-| **声明范围（允许）** | `package.json` 的 `engines.dsh` | `>=0.1.0-rc.6 <0.3.0-0`。dsh 的加载门禁只读这一项；范围内就允许加载 |
+| **声明范围（允许）** | `package.json` 的 `engines.dsh` | `>=0.2.2-rc.1 <0.3.0-0`。dsh 的加载门禁只读这一项；范围内就允许加载 |
 | **实测验证过** | `lib/runtime.js` 的 `KNOWN_DSH_VERSIONS` | 逐个版本跑过全量测试的清单。不在其中不会阻止加载，但会在启动时打 WARNING |
 | **门禁拒绝** | 同上 `engines.dsh` | 超出声明范围 → 日志 `skipping profile bundle`，插件不加载 |
 
-三者不是一回事。升级 dsh 到 0.3.x 时门禁会拒绝——那时必须先更新 `engines.dsh`，
-再补充实测。
+三者不是一回事，但**前两者必须相容**：`KNOWN_DSH_VERSIONS` 里的每个版本都必须落在
+`engines.dsh` 内，否则门禁会拒绝加载插件、而运行时清单还在宣称「已验证」。
+`tests/verify_compat.mjs` 有断言锁住这条（`verified list: every verified version
+falls inside engines.dsh`），并要求两处清单逐项相同。
+
+升级 dsh 到 0.3.x 时门禁会拒绝——那时必须先更新 `engines.dsh`，再补充实测。
 
 ## 版本矩阵
 
 按时间顺序，记录每个版本对插件作用点的影响。
+
+> **0.2.2-rc.1 之前的行是历史记录，不是当前支持范围。** v1.10.1 起
+> `engines.dsh` 收紧为 `>=0.2.2-rc.1 <0.3.0-0`，更旧的版本会被加载门禁直接拒绝
+> （日志 `skipping profile bundle`）。保留这些行是因为它们解释了现有代码里那些
+> 历史分支（`0.1.3 eventState` 协议、legacy `encodeMaterialization` 签名）的来历——
+> 删掉之后这些分支会变成无从追溯的考古谜题。
 
 | dsh 版本 | 形态与影响 |
 |---|---|
@@ -35,11 +45,10 @@
 | 0.2.0-rc.2 | 插件管理引入严格 peer 门禁；`dsh-session` 重构 tail-repair 并新增 `ToolCallRecovery`（`buildForkSeed` / `SESSION_FORMAT_VERSION` 导出不变）；`llm-deepseek` 拆分为 `-api-key` / `-account` |
 | 0.2.1-rc.1 | 门禁新增 `engines.dsh` 且**独占生效**；jsonl 后端改为 cordis 插件形态（只导出 `name`/`apply`/`Config`）；persistence 改为 `ctx.effect` 生命周期 + `listConcurrency` 限流；投影 `register()` 改为返回 effect |
 | 0.2.1-rc.2 ~ rc.5 | **纯版本刷新**。关键包源码与 rc.1/rc.3 逐字节一致，作用点零影响 |
-| 0.2.2-rc.1 | **五处变更**（见下节）。这是 0.2.x 线上第一个需要改插件代码的版本 |
+| **0.2.2-rc.1** | **五处变更**（见下节）。这是 0.2.x 线上第一个需要改插件代码的版本，也是当前支持下界 |
 
-**未验证的版本**：`0.1.3` 正式版、`0.1.4`、`0.1.6` 没有实测。它们夹在两个已验证版本
-之间，且相邻版本的 persistence / fork 结构未再变化，预期不构成风险；真遇到时跑
-`node tests/verify_compat.mjs` 确认。
+**未验证的版本**：`0.1.3` 正式版、`0.1.4`、`0.1.6` 从未实测（现已不在支持范围内）；
+`0.2.2` 的 rc.2 及更高小版本尚未出现，遇到时跑 `node tests/verify_compat.mjs` 确认。
 
 ## 0.1.3-alpha.2：persistence 重写
 

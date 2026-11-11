@@ -31,8 +31,9 @@ const sessionEntry = require.resolve('@deepseek-ai/dsh-session/package.json')
 const dshRoot = join(dirname(sessionEntry), '..', '..', '..')
 const dshPkg = JSON.parse(readFileSync(join(dshRoot, 'package.json'), 'utf8'))
 
-// 插件开发/验证过的版本；不在列表里打 WARN（结构断言照跑，人工确认兼容性）
-const KNOWN_VERSIONS = ['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8', '0.1.1-rc.1', '0.1.1-rc.2', '0.1.2-alpha.5', '0.1.2-rc.1', '0.1.3-alpha.2', '0.1.5-alpha.1', '0.1.5-rc.1', '0.1.5-rc.2', '0.1.7-rc.1', '0.1.7-rc.2', '0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5', '0.2.2-rc.1']
+// 插件开发/验证过的版本（与 lib/runtime.js 的 KNOWN_DSH_VERSIONS 保持一致，
+// 且必须落在 engines.dsh 声明的范围内）；不在列表里打 WARN（结构断言照跑，人工确认兼容性）
+const KNOWN_VERSIONS = ['0.2.2-rc.1']
 console.log(`dsh version: ${dshPkg.version} (root: ${dshRoot})`)
 if (!KNOWN_VERSIONS.includes(dshPkg.version)) {
   warn(`dsh ${dshPkg.version} not in known list ${KNOWN_VERSIONS.join('/')}`, 'verify compatibility manually')
@@ -168,6 +169,26 @@ if (gate !== null && typeof gate.evaluatePluginCompatibility === 'function') {
     check('plugin contract: declared dsh requirement satisfies runtime version', mismatched.length === 0,
       mismatched.length === 0 ? `dsh ${dshPkg.version} within declared range` : `WOULD BE SKIPPED: ${mismatched.map(([n, r]) => `${n}@${r}`).join(', ')}`)
   }
+}
+
+// ---- 已验版本清单与声明范围的一致性 ----
+// 两处清单（lib/runtime.js 的 KNOWN_DSH_VERSIONS 与本文件的 KNOWN_VERSIONS）必须
+// 完全相同，否则「实测过」与「运行时告警」会给出互相矛盾的判断。此外每条都必须
+// 落在 engines.dsh 内——新版 dsh 被实测通过、却忘了同步 engines.dsh 时，宿主门禁
+// 会直接跳过加载，而运行时清单还在说「已验证」。
+const runtimeMod = await import('../lib/runtime.js')
+const runtimeKnown = runtimeMod.KNOWN_DSH_VERSIONS
+check('verified list: lib/runtime.js and tests/verify_compat.mjs agree',
+  runtimeKnown.length === KNOWN_VERSIONS.length && runtimeKnown.every((v) => KNOWN_VERSIONS.includes(v)),
+  `runtime=[${runtimeKnown.join(',')}] test=[${KNOWN_VERSIONS.join(',')}]`)
+
+let semverForList = null
+try { semverForList = createRequire(join(dshRoot, 'package.json'))('semver') } catch { /* 缺失则跳过 */ }
+if (semverForList !== null && enginesDsh !== undefined) {
+  const outside = runtimeKnown.filter((v) => !semverForList.satisfies(v, enginesDsh, { includePrerelease: true }))
+  check('verified list: every verified version falls inside engines.dsh',
+    outside.length === 0,
+    outside.length === 0 ? `${runtimeKnown.length} 个版本都在 ${enginesDsh} 内` : `OUTSIDE ${enginesDsh}: ${outside.join(', ')}`)
 }
 
 // ---- 插件清单规范：bundle 声明 + 展示元数据 ----

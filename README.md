@@ -1,15 +1,28 @@
-# dsh-large-proj-perf
+# DSH Large Project Performance
 
 [![npm version](https://img.shields.io/npm/v/dsh-large-proj-perf.svg)](https://www.npmjs.com/package/dsh-large-proj-perf)
 [![npm downloads](https://img.shields.io/npm/dm/dsh-large-proj-perf.svg?label=npm%20monthly)](https://www.npmjs.com/package/dsh-large-proj-perf)
 [![npm total downloads](https://img.shields.io/npm/d18m/dsh-large-proj-perf.svg?label=npm%20total)](https://www.npmjs.com/package/dsh-large-proj-perf)
-[![dsh](https://img.shields.io/badge/dsh-0.2.2--rc.1-green)]()
+[![dsh](https://img.shields.io/badge/dsh-%3E%3D0.2.2--rc.1-green)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+> **⚠️ 最近发生重要更新**（1.10.x，破坏性）
+>
+> - **1.10.0 移除三项在 dsh 0.2.2 上恒不生效的能力**，配置键从 22 个减到 17 个
+>   （`warmupEnabled` / `warmOnCreated` / `fastInitFor` / `preparedCacheTrim` /
+>   `preparedCacheSize` 已删除），并修掉「改配置不生效」的晚绑定 bug。
+> - 支持范围收紧为 **dsh >= 0.2.2-rc.1 且 < 0.3.0**。更旧的 dsh 上会被加载门禁
+>   跳过（日志 `skipping profile bundle`）。
+> - 性能里程碑来自 **1.8.0**（冷读 21.2 s → 3.0 s）与 **1.9.0**（稳态
+>   RSS 1324 → 690 MB）。
+>
+> 从 1.4.0 或更早升级的用户，升级前请先读
+> [CHANGELOG 的重要版本速览](CHANGELOG.md#重要版本速览)。
 
 DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长会话，降低打开时的
 延迟与内存占用。
 
-> 名字里的 "large-proj" 是历史遗留；它优化的对象是**会话规模**，与项目大小无关。
+> 包名里的 "large-proj" 是历史遗留；它优化的对象是**会话规模**，与项目大小无关。
 
 每项能力都带**源码特征校验 + 协议探测 + 三层回退**（能力探测 / try-catch / 配置
 开关）。dsh 内部结构变化时对应补丁会自动跳过并告警，功能回退到官方实现，不会出错。
@@ -45,7 +58,7 @@ DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长
 
 ## 安装
 
-要求 Node **≥ 22.15.0**（需要 `node:zlib` 的 zstd 接口）。
+要求 Node **≥ 22.15.0**（需要 `node:zlib` 的 zstd 接口）与 **dsh ≥ 0.2.2-rc.1**。
 
 ```sh
 # 从 npm 安装（推荐）
@@ -181,7 +194,7 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
 
 **日志出现 `skipping profile bundle`**
 插件被 dsh 的版本门禁拦下了。从 dsh 0.2.1 起，门禁读插件 `package.json` 的
-`engines.dsh`；本插件声明 `>=0.1.0-rc.6 <0.3.0-0`。dsh 超出该范围时，要么升级插件，
+`engines.dsh`；本插件声明 `>=0.2.2-rc.1 <0.3.0-0`。dsh 超出该范围时，要么升级插件，
 要么用 `dsh plugin allow-version <pkg>@<ver> --profile web` 做精确版本豁免（有风险）。
 
 **API 请求 404 或连不上**
@@ -202,10 +215,10 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
   建议配合 [dsh-fresh-start](https://github.com/orangeofcarl0-sys/dsh-fresh-start)
   主动控制会话规模。
 - **零拷贝 fork 在 dsh 0.2.2 的 UI fork 链路上不生效**（原因见上）。
-- **实际只验证过 dsh 0.2.2**。`engines.dsh` 声明仍是 `>=0.1.0-rc.6 <0.3.0-0`，
-  但 v1.10.0 移除三项依赖旧结构的能力后，0.1.x 上可用的只剩零拷贝 fork 与分片
-  materialize（两者都带特征校验，不匹配会自动跳过）。是否收紧声明是独立的破坏性
-  决定，尚未做。
+- **只验证过 dsh 0.2.2**。`engines.dsh` 声明为 `>=0.2.2-rc.1 <0.3.0-0`——更旧的
+  dsh 上插件能力已基本为零（v1.10.0 移除三项依赖旧结构的能力后，0.1.x 只剩零拷贝
+  fork 与分片 materialize），因此直接由门禁拒绝，而不是让用户装上一个近乎空转的
+  插件。0.3.x 上会被同样拒绝，届时需要新版本插件。
 - **`retired` 补丁状态当前无使用者**：v1.10.0 移除了唯一会设置它的能力。保留该状态
   是因为它是「上游吸收能力后补丁主动让位」的唯一表达。
 
