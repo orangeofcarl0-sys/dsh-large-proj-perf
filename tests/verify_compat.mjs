@@ -263,5 +263,32 @@ check('cache identity: single shared constructor (no duplicates in lib/)',
     && !readFileSync(new URL('../lib/warmup.js', import.meta.url), 'utf8').includes('formatVersion: header?.version')
     && !readFileSync(new URL('../lib/backfill.js', import.meta.url), 'utf8').includes('formatVersion: meta.version'))
 
+// ---- turnOutline 折叠加速（v1.8）----
+// 上游的 apply 每次 turn 都整数组复制（`[...state.turns, x]` 与
+// `[...state.turns.slice(0, -1), y]`），N 个 turn 是 O(N²)：实测 2 万 turn 时
+// 比线性版慢 700 倍，占 24 万事件冷读 21 秒里的 16 秒（76%）。
+// 插件用 O(N) 等价 fold 替换它。这里锁三件事：
+//   1. 上游确实还是那个二次实现（若改成线性，本能力该退役）；
+//   2. 我们的 preview 与上游逐字一致（prompt/response 会进缓存与 wire）；
+//   3. 探针式等价校验存在（拿不到原始源码，只能运行时比对）。
+const turnOutlineSrc = src('dsh-session-turn-outline')
+check('turnOutline: upstream apply is still quadratic (mirrors both array copies)',
+  turnOutlineSrc.includes('turns: [...state.turns, {')
+    && turnOutlineSrc.includes('turns: [...state.turns.slice(0, -1), {'),
+  'if upstream goes linear, fastTurnOutline should retire')
+check('turnOutline: preview limits unchanged (50 prompt / 120 response)',
+  turnOutlineSrc.includes('PROMPT_PREVIEW_LIMIT = 50')
+    && turnOutlineSrc.includes('RESPONSE_PREVIEW_LIMIT = 120'))
+const fastTurnSrc = readFileSync(new URL('../lib/fast-turn-outline.js', import.meta.url), 'utf8')
+check('turnOutline: fast fold mirrors the same preview limits',
+  fastTurnSrc.includes('PROMPT_PREVIEW_LIMIT = 50') && fastTurnSrc.includes('RESPONSE_PREVIEW_LIMIT = 120'))
+check('turnOutline: install is gated by a runtime equivalence probe',
+  fastTurnSrc.includes('buildEquivalenceProbe') && fastTurnSrc.includes('probeEqual'))
+check('turnOutline: def.apply is a forwarding wrapper (no raw source available)',
+  // 记录这个事实：投影注册表把 definition.apply 包成
+  // `(state, event) => definition.apply(state, event)`，所以插件拿不到原始源码、
+  // 无法用特征串校验——这正是必须用运行时等价探针的原因。
+  projSrc.includes('apply: (state, event) => definition.apply(state, event)'))
+
 console.log(failures === 0 ? (warns > 0 ? `\nALL PASS (${warns} warning(s))` : '\nALL PASS') : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)

@@ -19,11 +19,12 @@ DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长
 
 | 能力 | 解决什么 | 运行时实测（dsh 0.2.2-rc.1） | 状态 |
 |---|---|---|---|
+| **turnOutline 折叠加速** | `turnOutline` 的 `apply` 每次 turn 整数组复制（O(n²)），30 000 turn 占冷读 16 秒 | **冷读 21.2 s → 3.0 s**（7×）；输出逐字段一致 | **补丁（主力）** |
 | 零拷贝 fork | fork 时逐事件深拷贝整个会话 | **UI 的「分支会话」不走这个补丁点**；直测 24 万事件同进程 A/B 约 -16% ~ -21% | 补丁（部分失效） |
 | 分片投影预热 | 打开历史会话时同步冷折叠冻结事件循环 | **在 0.2.2 上不生效**：上游在 `session/created` 广播里已把 cell 建满，29 个单元全部 `hot` | 补丁（已失效） |
 | 分片 materialize | 落盘时把整个会话序列化成一个巨大字符串 | 生效：24 万事件 2 帧 → 6 帧，字节数不变（差 0.02%） | 补丁 |
 | fork 缓存回填 | fork 子会话没有投影缓存行，重开走全量读 | 依赖预热，预热不触发时不会执行 | 补丁（可达性受限） |
-| 冷读回写 | 冷读后把投影状态写成缓存行 | **实测无耗时收益**（有行 19.1s vs 无行 18.9s）——冷读的大头不在投影折叠 | 补丁（默认关） |
+| 冷读回写 | 冷读后把投影状态写成缓存行 | **实测无耗时收益**（有行 19.1s vs 无行 18.9s） | 补丁（默认关） |
 | 冷会话 LRU 裁剪 | 冷会话事件树各占数百 MB，多份叠加 OOM | 依赖的 `coordinator.preparations` 在 0.2.2 已不存在 | `inactive` |
 | heap 上限告警 | V8 heap 上限过低时无任何提示 | 生效；但日志走 `logger.info`，默认级别下不可见 | 运行时检查 |
 
@@ -31,10 +32,11 @@ DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长
 > `active`，但一个从未被 UI 调用、一个每轮都静默跳过。判断实际效果要看
 > `stats.zeroCopy` / `stats.warmed` / `stats.alreadyHot` 这些命中计数。
 >
-> **冷读 16.6 秒的瓶颈不在投影折叠。** 实测证明给它加投影缓存行没有加速
-> （场景 G），时间花在「把日志变成内存事件数组」：逐行 `JSON.parse`、关系校验、
-> 整图深冻、`Session` 构造时的 surface 折叠。任何只优化投影层的手段都动不了
-> 这个数字。
+> **冷读的真实瓶颈已经定位并修掉。** 分段归因（场景 H）显示：解码 + 解析 +
+> 冻结 + `Session` 构造合计只要 1.4 秒；19 秒花在投影折叠上，其中 **`turnOutline`
+> 一个单元占 16 秒**——它每次 `turn/start` 都整数组复制，30 000 个 turn 是
+> O(n²)（实测 2 万 turn 时比线性实现慢 700 倍）。用 O(N) 等价 fold 替换后
+> 冷读 21.2 s → 3.0 s。
 >
 > 完整测量数据、方法与边界见 [docs/RUNTIME-ANALYSIS.md](docs/RUNTIME-ANALYSIS.md)；
 > 与其他 harness 的横向对比见 [docs/HARNESS-COMPARISON.md](docs/HARNESS-COMPARISON.md)。
@@ -122,6 +124,7 @@ node --max-old-space-size=8192 <dsh 入口> web
 | `heapWarnBytes` | `6442450944` | 字节 | heap 上限告警阈值（6 GiB） |
 | `debugApi` | `false` | — | 打开后暴露 `debug.fork` 调试端点（仅用于测量） |
 | `coldWriteBack` | `false` | — | 冷读后回写投影缓存行（实测无耗时收益，仅让列表读看到更新数据） |
+| `fastTurnOutline` | `true` | — | 把 `turnOutline` 的 O(n²) 折叠换成 O(n)（冷读 21.2s → 3.0s） |
 
 `backfillOnBoot` 默认关闭：它的解码在插件层同步执行，超大文件仍可能短暂冻结事件
 循环，需要时再开。开启后补行任务在启动 **15 秒**后触发，不会立刻执行。

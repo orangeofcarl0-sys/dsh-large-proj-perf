@@ -9,6 +9,73 @@
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-11-11
+
+**冷读 21.2 秒 → 3.0 秒（7×）。** 前两轮都在猜瓶颈且猜错；这一轮先做归因，
+结果指向一个此前完全没怀疑过的地方：**单个投影单元的二次复杂度**。
+
+### 归因（场景 H，24 万事件 / 30 000 turn）
+
+| 段 | 耗时 | 占比 |
+|---|---:|---:|
+| `open()` + `read()` 解码链路 | 1650 ms | 7.8% |
+| `Session` 构造（信封 + surface） | 166 ms | 0.8% |
+| 投影折叠 | 16728 ms | 78.9% |
+| ├ **`turnOutline`** | **16061 ms** | **75.8%** |
+| └ 其余 28 个单元合计 | 667 ms | 3.1% |
+
+`turnOutline` 的 `apply` 每次 `turn/start` 执行 `turns: [...state.turns, next]`、
+每次 `user/message` / `turn/end` 执行 `turns: [...state.turns.slice(0, -1), fixed]`
+——**整数组复制**，N 个 turn 是 O(N²)。实测：5 000 turn 87 ms、10 000 turn
+439 ms、20 000 turn 5238 ms（线性等价实现对应 2 / 12 / 7 ms，2 万 turn 时
+上游慢 **701 倍**）。
+
+> **纠正 v1.7 的错误结论**：v1.7 说「折叠循环 0 次迭代、16 秒在日志→内存事件数组」。
+> 那只在缓存行命中时成立。真实冷读（空缓存）里折叠是绝对大头，解码链路只要 1.4 秒。
+
+### Added
+
+- **`lib/fast-turn-outline.js`** + `fastTurnOutline` 配置键（默认 `true`）：
+  用 O(N) 等价 fold 替换 `turnOutline` 的 `def.apply`。
+  - `preview` 逐字复刻上游（`limit*2` 提前截断、空白压缩、省略号规则，
+    prompt 50 / response 120）；
+  - fold 逐 case 复刻（turn 号不递增则忽略、只取第一条 user 消息、空白 prompt
+    不写入、assistant draft 覆盖、`turn/end` 提交）；
+  - **安装前跑运行时等价探针**：15 条覆盖全部分支的合成事件流，分别跑上游
+    `apply` 与我们的 fold，`JSON.stringify` 结果必须相等，否则不上线。
+    原因是拿不到原始源码——投影注册表把 `definition.apply` 包成了
+    `(state, event) => definition.apply(state, event)`。
+- `tests/test_fast_turn_outline.mjs`：11 组 preview 边界 + 逐字段 fold 比对 +
+  三条边界 + 性能断言（6 000 turn 时至少 10 倍）。
+- `tests/bench_cold_read.mjs`：分段归因基准（解码 / 解压 / 解析 / 深冻 /
+  Session 构造），可复算。
+- `verify_compat` 新增 5 条断言：上游仍是二次实现、preview 上限未变、
+  我们的实现与之对齐、等价探针存在、`def.apply` 是转发包装这一事实。
+
+### Changed
+
+- **README 能力表把「turnOutline 折叠加速」列为首项**，并删掉 v1.7 那条
+  「瓶颈不在投影折叠」的错误结论。
+- `docs/RUNTIME-ANALYSIS.md` 新增场景 H（完整归因 + O(n²) 证据 + 修复实测），
+  并把结论摘要的第二条改写为「76% 是单个投影单元的 O(n²)」。
+- 配置键 20 → 21。
+
+### 评估后放弃的方案（记录以免重复投入）
+
+- **worker thread 移出解析**：分段归因证明它只能拿走解码链路的 6.4%
+  （1.4 s 中的一部分，还要付跨线程复制成本），而 76% 在投影折叠上、worker
+  拿不走。上一版计划的三条准入条件第一条（decode > 10 s）实测就不成立（1.36 s）。
+- **帧索引**：帧扫描实测只占 0.6 ms；`open()` 一次就把 29 帧全解压完，
+  且当前没有任何消费者按非零 offset 读。
+- **事件瘦身**：`dsh-compaction-tool-result-pruner` 只在上下文压力时裁剪，
+  且原始结果完整保留在日志里，日志体积不变。
+
+### 下一步（若还要再压）
+
+剩余 3 秒的构成：解码 1.65 s + 其余 28 个单元 0.67 s + 线性 fold 0.1 s + HTTP。
+按成本排序：逐个检查其余单元的 `apply` 是否有同样的二次写法（本轮只测了
+`turnOutline`）；解码那 1.65 s 只能靠 worker 或帧索引，上限 1 秒。
+
 ## [1.7.0] — 2026-11-11
 
 **第三轮优化：一次被自己实测推翻的方案，以及由此得到的正确结论。**

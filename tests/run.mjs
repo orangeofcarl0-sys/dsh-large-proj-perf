@@ -23,6 +23,7 @@ const ORDER = [
   'test_cache_trim.mjs',
   'smoke_warmup.mjs',
   'test_cold_writeback.mjs',
+  'test_fast_turn_outline.mjs',
   'test_backfill.mjs',
   'test_chunked_materialize.mjs',
   'e2e_real_components.mjs',
