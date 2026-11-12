@@ -410,4 +410,79 @@ export async function scenarioG(opts) {
   }
 }
 
-export const SCENARIOS = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, G: scenarioG }
+// ---------- 场景 H：渲染链路的分页载荷（v1.12） ----------
+//
+// 要证明的事：浏览器首屏与每次向上滚动拉到的窗口到底有多大、服务端要花多久。
+// 客户端固定请求 500 条消息（HISTORY_PAGE_OPTIONS），而 `session/follow` 与
+// `session/events` 共用同一个 paginate，所以用 unary 的 events 测出的字节数与
+// 条数关系就是首屏 WS 帧的量级。
+//
+// 两轮：
+//   upstream —— maxInitialMessages=0，完全上游行为（客户端请求 500 条 + turnWindow 50）
+//   capped   —— maxInitialMessages=25，验证截断后的条数与字节
+//
+// 注意：客户端虽然请求 maxMessages=500，但 paginate 在「≥50 条消息且跨过 ≥2 个
+// turn」时就切页，所以短 turn 会话的真实首屏是 ~50 条。只压 maxMessages 对这种
+// 会话毫无效果（实测 150 与 500 产出同样 231 个事件）；必须同时压
+// turnWindow.minMessages。
+const RENDER_PAGE = { maxMessages: 500, turnWindow: { minMessages: 50, minTurns: 2 } }
+
+const countMessages = (records) => records.filter((record) => {
+  const type = record?.event?.type
+  return type === 'user/message' || type === 'assistant/message'
+}).length
+
+async function renderPageRun(options) {
+  return withInstance(options, async ({ server, client }) => {
+    await client.statsReset()
+    const address = { kind: 'session', sessionId: LONG }
+
+    const coldStart = performance.now()
+    const first = await client.rpc('session', 'events', { address, ...RENDER_PAGE })
+    const coldMs = performance.now() - coldStart
+    const firstRecords = first.value?.records ?? []
+    const firstBytes = JSON.stringify(first.value ?? null).length
+    const recordsBytes = JSON.stringify(firstRecords).length
+
+    const warmStart = performance.now()
+    const second = await client.rpc('session', 'events', { address, ...RENDER_PAGE })
+    const warmMs = performance.now() - warmStart
+    const secondRecords = second.value?.records ?? []
+
+    const projStart = performance.now()
+    const projections = await client.rpc('session', 'projections', { sessionId: LONG })
+    const projectionMs = performance.now() - projStart
+    const projectionBytes = JSON.stringify(projections.value?.values ?? null).length
+
+    const stats = await client.stats()
+    return {
+      coldMs: +coldMs.toFixed(1),
+      warmMs: +warmMs.toFixed(1),
+      records: firstRecords.length,
+      messages: countMessages(firstRecords),
+      warmRecords: secondRecords.length,
+      bytes: firstBytes,
+      recordsBytes,
+      hasMore: first.value?.hasMore === true,
+      projectionKeys: Object.keys(projections.value?.values ?? {}).length,
+      projectionMs: +projectionMs.toFixed(1),
+      projectionBytes,
+      renderPages: stats.value.render?.pages ?? [],
+      snapshotCount: stats.value.render?.snapshotCount ?? 0,
+      patches: stats.value.patches,
+    }
+  })
+}
+
+export async function scenarioH(opts) {
+  return {
+    upstream: await renderPageRun({ ...opts, extraEnv: { DSH_PERF_RENDER_TIMING: 'true' } }),
+    capped: await renderPageRun({
+      ...opts,
+      port: opts.port + 1,
+      extraEnv: { DSH_PERF_RENDER_TIMING: 'true', DSH_PERF_MAX_INITIAL_MESSAGES: '25' },
+    }),
+  }
+}
+
+export const SCENARIOS = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, G: scenarioG, H: scenarioH }

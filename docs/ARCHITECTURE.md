@@ -12,13 +12,14 @@
 
 ## 1. 问题分类
 
-大会话的代价可以分成三侧：
+大会话的代价可以分成四侧：
 
 | 侧 | 环节 | 症状 |
 |---|---|---|
 | **写入** | `Session` 构造时逐事件 `snapshotJsonValue` + `deepFreeze`；`encodeMaterialization` 把整个 seed 拼成一个字符串 | fork 与落盘都要复制/序列化全部事件 |
 | **读取** | 打开时把 18 MB zstd 变成内存事件数组；再对 29 个投影单元逐个 `def.apply` 折叠全部事件 | 首次打开 21 秒（实测，见 MEASUREMENTS §1） |
 | **驻留** | 三处事件缓存都按「会话条数」限容，不按字节 | 6 个 18 MB 会话 → 1.2 GB RSS（实测，见 MEASUREMENTS §2） |
+| **渲染** | 浏览器拿到窗口后**全量挂载**（上游没有虚拟滚动），且投影快照里装着全部 turn | 打开 7.4 秒到首行；批量翻页可达秒级阻塞（见 RENDER-ANALYSIS） |
 
 对应的能力：
 
@@ -26,6 +27,8 @@
 |---|---|---|
 | 读取 | `fastTurnOutline` | 冷读 21.2 s → 3.0 s |
 | 驻留 | `memoryBudget` | 稳态 RSS 1324 MB → 690 MB |
+| 渲染 | `clientContainment`（浏览器侧） | 批量翻页阻塞 2836 → 1489 ms |
+| 渲染 | `renderTiming`（诊断） | 首行/稳定/长任务 + 服务端每页耗时与字节 |
 | 写入 | 零拷贝 fork | 直测 -16% ~ -21%（但 UI 不走这条路） |
 | 写入 | `chunkedMaterialize` | 帧数 2 → 6，字节不变 |
 | 读取 | `coldWriteBack` | 无耗时收益，默认关 |
@@ -184,6 +187,46 @@ v1.9.0 及之前的一个真实 bug：**打开 `backfillOnBoot` 不会补跑扫�
 **探测失败**：`sessionQuery._observations.cache` 不可达（上游改了私有字段名）→
 `inactive`，不做任何猜测。
 
+### 3.5 渲染链路：诊断、窗口预算、客户端 containment
+
+浏览器侧的完整分析见 [RENDER-ANALYSIS.md](RENDER-ANALYSIS.md)。实现分三块：
+
+**`lib/render-timing.js`（诊断，默认关）**
+包装两个点：`sessionProjections.snapshot`（同步热路径，记录耗时与单元数）与
+`sessionController` 内部 `webController.follow` / `historyController.events`
+（记录首帧耗时、事件数、序列化字节、`hasMore`）。写进
+`stats.render.{snapshotCount, snapshotMs, snapshotMaxMs, lastUnits, pages[]}`。
+
+> **为什么能包装内部对象**：`sessionController` 是 cordis 服务，其构造函数把
+> `historyController` / `webController` 放在实例上（`dsh-api-session-controller`
+> `src/index.ts:208-210`）。二者都是普通对象，直接替换方法即可；这与
+> `memory-budget.js` 摸 `sessionQuery._observations` 是同一类做法，都带能力探测。
+
+**`lib/history-budget.js`（默认关）**
+`maxInitialMessages`（消息上限，**同时压 `turnWindow.minMessages`**）与
+`maxPageBytes`（按 JSON 长度估算，超限时下调 `maxMessages` 重算，最多 3 次）。
+只改请求参数，不改分页语义；`hasMore` 仍由上游按实际切页位置计算。
+
+> 实测教训：客户端请求 `maxMessages: 500`，但 `paginate` 在「≥50 条消息且跨过
+> ≥2 个 turn」时就切页，所以短 turn 会话的真实首屏是 ~50 条。**只压
+> maxMessages 对这种会话完全无效**（150 与 500 产出同样的 231 个事件）。
+
+**`lib/client.js`（浏览器端，受 config 控制）**
+dsh 的客户端模块表按「经典脚本 + 惰性工厂」加载：`package.json` 声明
+`dsh.client = { platform: 'web' }` 与 `exports["./client"]`，文件形如
+`window.__ModuleLoader__.load({ id, factory })`（与官方 decoration 模板一致，无需构建）。
+
+- `clientContainment`（默认开）：行数 >80 时在 flow 容器上打
+  `data-dsh-perf-dense`，CSS 给第 30 行之后的离屏行加
+  `content-visibility: auto; contain-intrinsic-size: auto 120px`。
+- `renderTiming`（默认关）：`PerformanceObserver` 收
+  `long-animation-frame` / `longtask`，`MutationObserver` 盯 flow 行数，
+  回传「导航 → 首行 / 稳定 / 长任务 / 堆」到 `perf.report`。
+
+**硬约束**：`exports["./client"]` 指向的文件缺失会让整个 `clientModules`
+服务**启动失败**（不是降级）。`tests/verify_compat.mjs` 有断言同时检查声明、
+文件存在与包名 id，缺一不可。
+
 ## 4. 非补丁：运行时检查与默认关的能力
 
 ### 4.1 heap 上限告警（不是补丁）
@@ -286,6 +329,9 @@ lib/patches/zero-copy-fork.js      零拷贝 fork
 lib/patches/chunked-materialize.js 分片 materialize
 lib/fast-turn-outline.js           turnOutline 折叠加速
 lib/memory-budget.js               事件缓存字节预算
+lib/render-timing.js               渲染链路计时（服务端分页/投影 + 浏览器样本）
+lib/history-budget.js              首屏消息上限与单页字节上限（默认关）
+lib/client.js                      浏览器端：离屏行 containment + 渲染计时采集
 lib/backfill.js                    磁盘冷会话补行（默认关）
 lib/cold-writeback.js              冷读回写（默认关）
 tests/                    不随 npm 包发布

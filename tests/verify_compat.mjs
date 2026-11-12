@@ -33,7 +33,7 @@ const dshPkg = JSON.parse(readFileSync(join(dshRoot, 'package.json'), 'utf8'))
 
 // 插件开发/验证过的版本（与 lib/runtime.js 的 KNOWN_DSH_VERSIONS 保持一致，
 // 且必须落在 engines.dsh 声明的范围内）；不在列表里打 WARN（结构断言照跑，人工确认兼容性）
-const KNOWN_VERSIONS = ['0.2.2-rc.1']
+const KNOWN_VERSIONS = ['0.2.2-rc.1', '0.2.2-rc.2']
 console.log(`dsh version: ${dshPkg.version} (root: ${dshRoot})`)
 if (!KNOWN_VERSIONS.includes(dshPkg.version)) {
   warn(`dsh ${dshPkg.version} not in known list ${KNOWN_VERSIONS.join('/')}`, 'verify compatibility manually')
@@ -329,6 +329,58 @@ check('memory budget: defaults to 512 MiB, 0 disables',
   /DEFAULT_MEMORY_BUDGET_BYTES = 536870912/.test(constantsSrc)
     && configSrc.includes('memoryBudgetBytes: DEFAULT_MEMORY_BUDGET_BYTES')
     && memBudgetSrc.includes("setPatchStatus('memoryBudget', 'off')"))
+
+// ---- 客户端 bundle 清单（v1.12）----
+// dsh 的 client-modules 会读 dsh.client，并要求 exports["./client"] 指向真实文件。
+// **文件缺失会让整个 clientModules 服务启动失败**（不是降级），所以这里既查声明
+// 也查文件内容，缺一不可。
+const clientRel = typeof pluginPkg.exports?.['./client'] === 'string'
+  ? pluginPkg.exports['./client']
+  : pluginPkg.exports?.['./client']?.default
+check('client manifest: dsh.client.platform is web',
+  pluginPkg.dsh?.client?.platform === 'web', String(pluginPkg.dsh?.client?.platform))
+check('client manifest: exports "./client" points at a bundle',
+  typeof clientRel === 'string' && clientRel.startsWith('./'), String(clientRel))
+if (typeof clientRel === 'string' && clientRel.startsWith('./')) {
+  let clientSrc = ''
+  try { clientSrc = readFileSync(new URL(clientRel, pluginRoot), 'utf8') } catch { clientSrc = '' }
+  check('client manifest: the declared bundle exists (missing file breaks clientModules)',
+    clientSrc !== '', clientRel)
+  check('client manifest: bundle registers through the module loader',
+    clientSrc.includes('__ModuleLoader__.load('), 'classic script + lazy factory')
+  check('client manifest: bundle declares the same id as the package',
+    clientSrc.includes(`'dsh-large-proj-perf'`), 'dsh-large-proj-perf')
+  check('client manifest: bundle exports a factory returning apply()',
+    /factory:\s*function/.test(clientSrc) && /apply:\s*function/.test(clientSrc))
+  check('client manifest: bundle gates every UI change on host config',
+    // 界面改动只在 clientContainment 明确为 true 时启用；采集器默认开装、
+    // 配置未开启 renderTiming 就整体拆除。
+    clientSrc.includes('config.clientContainment === true')
+      && clientSrc.includes('config.renderTiming !== true'))
+}
+
+// ---- 渲染链路上游形状（docs/RENDER-ANALYSIS.md 的静态前提）----
+// 这些断言的作用不是「验证插件」，而是**锁住分析结论所依赖的上游事实**：
+// 一旦上游做了虚拟化或加了字节上限，本插件的渲染相关能力就该退役。
+const chatFlowSrc = src('dsh-client-ui-chat', 'src/client/chat/ChatFlow.tsx')
+check('render: chat flow still maps every entry (no virtualization to exploit)',
+  chatFlowSrc.includes('entries.map(') && !chatFlowSrc.includes('useVirtualizer'))
+const uiChatCss = src('dsh-client-ui-chat', 'src/client/chat/ChatView.module.css')
+check('render: row wrapper has no content-visibility upstream',
+  !uiChatCss.includes('content-visibility'),
+  'plugin injects it client-side only')
+const historySrc = src('dsh-api-session-controller', 'src/history.ts')
+check('render: pagination is still message-count only (no byte cap)',
+  historySrc.includes('export function paginate(') && !historySrc.includes('maxPageBytes'),
+  'plugin adds the byte/count budget')
+const sessionClientSrc = src('dsh-api-session-controller', 'src/client/sessions/session.ts')
+check('render: first page is still 500 messages',
+  /HISTORY_PAGE_OPTIONS = \{ maxMessages: 500/.test(sessionClientSrc),
+  'plugin can clamp it via maxInitialMessages')
+check('render: projection snapshot is still synchronous (timing point is safe to wrap)',
+  /snapshot\(\s*session: Session,\s*keys\?: ProjectionKeySelection,?\s*\): ProjectionSnapshot/.test(
+    src('dsh-session-projection', 'src/index.ts').replace(/\n\s*/g, ' ')))
+
 
 console.log(failures === 0 ? (warns > 0 ? `\nALL PASS (${warns} warning(s))` : '\nALL PASS') : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)

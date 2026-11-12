@@ -17,6 +17,7 @@
 
 | 版本 | 类型 | 一句话 |
 |---|---|---|
+| [1.12.0](#1120-2026-11-13-重要性能) | **性能里程碑** | 首次测浏览器渲染：打开 7.4 s 到首行；离屏行 containment 让批量翻页阻塞 -47% |
 | [1.11.0](#1110-2026-11-11-重要破坏性) | **破坏性** | 支持范围收紧到 `>=0.2.2-rc.1 <0.3.0-0`；更旧的 dsh 上不再加载 |
 | [1.10.0](#1100-2026-11-11-重要破坏性) | **破坏性** | 移除三项在 0.2.2 上恒不生效的能力；配置键 22 → 17；修掉「改配置不生效」的晚绑定 bug |
 | [1.9.0](#190-2026-11-11-重要性能) | **性能里程碑** | 事件缓存改为按字节限容，稳态 RSS 1324 → 690 MB |
@@ -28,6 +29,51 @@
 纯文档修补不标重要——例如 **1.10.1 不标**，它只修文档事实错误，行为零变化。
 
 ## [Unreleased]
+
+## [1.12.0] — 2026-11-13 — ⚠️ 重要（性能）
+
+**首次把测量推进到浏览器侧。** 此前所有数字都是服务端的冷读/RSS，渲染从未被观测。
+
+### 新增
+
+- **`lib/render-timing.js`（`renderTiming`，默认关）**：包装
+  `sessionProjections.snapshot` 与 `sessionController` 的
+  `webController.follow` / `historyController.events`，记录每次打开/翻页的
+  耗时、事件数与序列化字节；浏览器样本落在同一个 `stats.render` 下。
+- **`lib/client.js`（首个浏览器端 bundle）**：`dsh.client = { platform: "web" }`
+  \+ `exports["./client"]`，普通 `__ModuleLoader__.load` 脚本，无需构建。
+  采集 `long-animation-frame` / `longtask` 与「导航 → 首行 / 稳定」，回传
+  `perf.report`。
+- **`lib/history-budget.js`（`maxInitialMessages` / `maxPageBytes`，默认关）**：
+  首屏消息上限（同时压 `turnWindow.minMessages`）与单页字节上限。
+- **`clientContainment`（默认开）**：长转录（>80 行）给第 30 行之后的离屏行加
+  `content-visibility: auto`。
+
+### 实测结论
+
+- **一次打开 = 74 KB 消息 + 6.76 MB 投影。** 投影是消息的 **91 倍**，
+  `turnOutline` 一个单元装着全部 30 000 个 turn。把首屏从 50 条压到 25 条只省
+  0.5% 的字节——**首屏消息窗口不是瓶颈**，这是本轮最重要的否证。
+- **导航 → 首行 7.4 s**：页面装载 1.6 s + 服务端首帧 2.5 s + 客户端阻塞 0.44 s
+  \+ 未归因等待 2.9 s。
+- **批量翻页才是「分钟级」的来源**：快速连续翻 10 页时客户端合并发布，
+  一次性挂载上千行。无 containment：11 个长任务 / 2836 ms 阻塞 / 最长 416 ms；
+  有 containment：18 个长任务 / **1489 ms 阻塞（-47%）** / 最长 244 ms。
+- 稳态翻页很便宜：每页 200 事件 / 70 KB / 服务端 0.3–0.6 ms，单页无长任务；
+  但 DOM 与堆单调增长（≈73 KB/行，600 行涨 44 MB）。
+
+完整数据、归因与上游建议见新增的 [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)。
+
+### 验证
+
+- 新增 `tests/test_render_timing.mjs`（30 条）：配置门禁、计时点、窗口截断、
+  字节上限、dispose 还原、安装时快照语义。
+- `verify_compat.mjs` 新增 14 条：客户端清单（声明 + 文件存在 + 包名 id +
+  工厂形状 + 配置门禁）、**上游渲染形状**（`ChatFlow` 仍无虚拟化、分页仍无字节
+  上限、首屏仍是 500、`snapshot` 仍是同步）。
+- `tools/runtime-probe` 新增 **scenario H**：量首屏/分页的字节数与服务端耗时，
+  对比 `maxInitialMessages` 截断。
+- `0.2.2-rc.2` 登记进 `KNOWN_DSH_VERSIONS`（`npm test` 对 rc.2 的真实包源码全绿）。
 
 ## [1.11.0] — 2026-11-11 — ⚠️ 重要（破坏性）
 

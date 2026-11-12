@@ -46,9 +46,10 @@ falls inside engines.dsh`），并要求两处清单逐项相同。
 | 0.2.1-rc.1 | 门禁新增 `engines.dsh` 且**独占生效**；jsonl 后端改为 cordis 插件形态（只导出 `name`/`apply`/`Config`）；persistence 改为 `ctx.effect` 生命周期 + `listConcurrency` 限流；投影 `register()` 改为返回 effect |
 | 0.2.1-rc.2 ~ rc.5 | **纯版本刷新**。关键包源码与 rc.1/rc.3 逐字节一致，作用点零影响 |
 | **0.2.2-rc.1** | **五处变更**（见下节）。这是 0.2.x 线上第一个需要改插件代码的版本，也是当前支持下界 |
+| 0.2.2-rc.2 | **包版本刷新**。`npm test` 全绿（`verify_compat` 对 rc.2 的真实包源码跑全部特征断言，含新增的渲染链路上游形状断言），已登记进 `KNOWN_DSH_VERSIONS` |
 
 **未验证的版本**：`0.1.3` 正式版、`0.1.4`、`0.1.6` 从未实测（现已不在支持范围内）；
-`0.2.2` 的 rc.2 及更高小版本尚未出现，遇到时跑 `node tests/verify_compat.mjs` 确认。
+`0.2.2` 的更高小版本尚未出现，遇到时跑 `node tests/verify_compat.mjs` 确认。
 
 ## 0.1.3-alpha.2：persistence 重写
 
@@ -201,9 +202,13 @@ dsh 从插件 `package.json` 读两类信息，缺一不可：
 3. `npm test` 全通过（含真实组件 e2e），记下运行器打印的断言总数。
 4. 若新版本不在 `KNOWN_DSH_VERSIONS`，在 `lib/runtime.js` 与
    `tests/verify_compat.mjs` 两处登记（两处必须保持一致）。
-5. 实机启动 web profile，用 `stats.get` 确认各点位状态符合预期。真实状态键只有
-   4 个补丁：`zeroCopyFork`、`chunkedMaterialize`、`fastTurnOutline`、
-   `memoryBudget`，外加可选的 `coldWriteBack`（默认关=off）。heap 检查不在其中。
+5. 实机启动 web profile，用 `stats.get` 确认各点位状态符合预期。真实状态键是
+   4 个常开补丁：`zeroCopyFork`、`chunkedMaterialize`、`fastTurnOutline`、
+   `memoryBudget`，外加三个默认关的能力：`coldWriteBack`、`renderTiming`、
+   `historyBudget`（关闭时值为 `off`）。heap 检查不在其中。
    （`warmup` / `fastInitFor` / `preparedCacheTrim` 已于 v1.10.0 移除。）
-6. 如果这次升级需要更新 `engines.dsh`（例如跨到 0.3.x），同步更新 README 的支持
+6. v1.12 起插件带浏览器端 bundle。升级后除了服务端日志，还要确认浏览器控制台没有
+   `client-modules` 装载错误——清单声明与文件不一致会让整个 `clientModules`
+   服务启动失败（`tests/verify_compat.mjs` 有断言，但实机验证仍需做一次）。
+7. 如果这次升级需要更新 `engines.dsh`（例如跨到 0.3.x），同步更新 README 的支持
    版本一行与 `docs/ARCHITECTURE.md` 顶部的验证边界。

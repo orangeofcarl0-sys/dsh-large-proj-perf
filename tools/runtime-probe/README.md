@@ -68,7 +68,7 @@ node tools/runtime-probe/run.mjs \
 `--scenario` 可接受 `A,B,C` 子集。报告写到 `<out>/report.json` 与 `report.md`，
 多次调用**累积合并**（不会互相覆盖）。
 
-## 六个场景
+## 八个场景
 
 | 场景 | 驱动 | 回答什么问题 |
 |---|---|---|
@@ -78,6 +78,11 @@ node tools/runtime-probe/run.mjs \
 | D | `session/fork` RPC | UI 的「分支会话」会调用零拷贝补丁吗？ |
 | E | `debug.fork` + 同进程开关切换 | 补丁本身值多少（原生 vs 零拷贝）？ |
 | F | 两次独立进程 + 环境变量定值 | 分片 materialize 的帧数/字节/耗时差异？ |
+| G | 清缓存 → 冷读 → 重启 → 再读 | 冷读回写的跨进程收益（负结果） |
+| H | `session/events` 的 500 条窗口 + `session/projections` | 打开会话的字节构成、`maxInitialMessages` 截断效果 |
+
+> **只有服务端**。浏览器侧的首行/长任务需要 `lib/client.js` 采集，由
+> `docs/RENDER-ANALYSIS.md` 记录的浏览器实测流程覆盖——本工具不驱动浏览器。
 
 ## 关键约束
 

@@ -29,15 +29,19 @@ DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长
 
 ## 能力与效果
 
-数字都是 dsh 0.2.2-rc.1 上的实测值，来源与测量边界见
-[docs/MEASUREMENTS.md](docs/MEASUREMENTS.md)。
+数字都是 dsh 0.2.2 上的实测值，来源与测量边界见
+[docs/MEASUREMENTS.md](docs/MEASUREMENTS.md)（时间/空间）与
+[docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)（浏览器渲染）。
 
 | 能力 | 解决什么 | 实测效果 | 默认 |
 |---|---|---|---|
 | **turnOutline 折叠加速** | 该投影单元每次 turn 整数组复制（O(n²)），占冷读 76% | 冷读 **21.2 s → 3.0 s** | 开 |
 | **事件缓存字节预算** | dsh 的缓存只按「会话条数」限容；6 个 18 MB 会话涨到 1.2 GB | 稳态 RSS **1324 → 690 MB** | 开（512 MiB） |
+| **离屏行 containment** | 聊天列表没有虚拟滚动，已加载的每一行都参与布局 | 批量翻页阻塞 **2836 → 1489 ms**（-47%） | 开 |
 | 分片 materialize | 落盘时把整个会话序列化成一个巨大字符串 | 2 帧 → 6 帧，消除 `RangeError` | 开 |
 | 零拷贝 fork | fork 时逐事件深拷贝整个会话 | 直测 -16% ~ -21%（**但 UI 不走这条路**，见下） | 开 |
+| 渲染耗时诊断 | 打开会话慢在哪一段无从得知 | `renderTiming` 记录首行/稳定/长任务 + 服务端分页 | 关 |
+| 历史窗口预算 | 一页只按消息条数切，无字节上限 | 合成会话 70 KB/页，未触及；留给工具输出密集的会话 | 关 |
 | 冷读回写 | 冷读后把投影状态写成缓存行 | **无耗时收益**，只让列表读看到新数据 | 关 |
 | 冷会话补行 | 磁盘上的大会话没有投影缓存行 | 启动 15 s 后批量补写 | 关 |
 | heap 上限告警 | V8 heap 上限过低时无任何提示 | 启动时检查并告警 | — |
@@ -109,6 +113,7 @@ node --max-old-space-size=8192 <dsh 入口> web
 |---|---|---|---|
 | `fastTurnOutline` | `true` | — | `turnOutline` 的 O(n²) → O(n) |
 | `memoryBudgetBytes` | `536870912` | 字节 | 事件缓存总预算（512 MiB）；`0` 关闭 |
+| `clientContainment` | `true` | — | 长转录离屏行 `content-visibility`（批量翻页阻塞 -47%） |
 | `heapWarnBytes` | `6442450944` | 字节 | heap 上限告警阈值（6 GiB） |
 | `zeroCopyFork` | `true` | — | 零拷贝 fork |
 | `slowForkWarnMs` | `100` | ms | fork 耗时超过此值打告警 |
@@ -118,6 +123,9 @@ node --max-old-space-size=8192 <dsh 入口> web
 | `chunkSize` | `5000` | 事件 | 分片遍历每片的事件数（下限 1） |
 | `chunkYieldMs` | `0` | ms | 让出方式：0 = `setImmediate`，>0 = `setTimeout` |
 | `keepRecent` | `50` | 条 | 内存保留的最近统计记录数 |
+| `renderTiming` | `false` | — | 渲染诊断：服务端分页/投影计时 + 浏览器首行/长任务 |
+| `maxInitialMessages` | `0` | 条 | 首屏消息上限（同时压 `turnWindow.minMessages`）；`0` 不限制 |
+| `maxPageBytes` | `0` | 字节 | 单页估算字节上限；`0` 不限制 |
 | `coldWriteBack` | `false` | — | 冷读后回写投影缓存行（无耗时收益） |
 | `backfillOnBoot` | `false` | — | 启动后补写磁盘冷会话的投影缓存行 |
 | `backfillMaxSessions` | `8` | 个 | 补行扫描会话数上限 |
@@ -125,8 +133,9 @@ node --max-old-space-size=8192 <dsh 入口> web
 | `backfillMaxBytes` | `33554432` | 字节 | 补行的最大文件大小（32 MiB） |
 | `debugApi` | `false` | — | 暴露 `debug.fork` 调试端点（仅用于测量） |
 
-**哪些键运行期改得动**：`fastTurnOutline` / `chunkedMaterialize` / `zeroCopyFork`
-只在安装时读一次，改了要重启（或用启动期环境变量，见下）。其余键在下次使用时重读。
+**哪些键运行期改得动**：`fastTurnOutline` / `chunkedMaterialize` / `zeroCopyFork` /
+`maxInitialMessages` / `maxPageBytes` 只在安装时读一次，改了要重启（或用启动期
+环境变量，见下）；`clientContainment` 由浏览器在启动时取一次。其余键在下次使用时重读。
 
 启动期还可用环境变量覆盖任意配置键（仅用于离线测量）：键名是大写蛇形加
 `DSH_PERF_` 前缀，例如 `DSH_PERF_CHUNKED_MATERIALIZE=false`。
@@ -144,6 +153,7 @@ node --max-old-space-size=8192 <dsh 入口> web
 | `stats.reset` | 清零计数（保留 `patches` 与 `dshVersion`） |
 | `config.get` / `config.set` | 读取/修改运行时开关，`set` 同时写 settings 持久化 |
 | `debug.fork` | 仅当 `debugApi=true` 时存在：直接调用 `SessionStore.prototype.fork` |
+| `perf.report` | 仅当 `renderTiming=true` 时存在：浏览器回传首行/稳定/长任务样本 |
 
 ```sh
 curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/stats.get
@@ -166,9 +176,18 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
   "forks": 0, "zeroCopy": 0, "fallbacks": 0, "forkRecent": [],
   "memoryBudget": { "budgetBytes": 536870912, "cachedEntries": 0, "estimatedBytes": 0 },
   "memoryBudgetTrimmed": 0, "memoryBudgetFreedBytes": 0, "memoryBudgetOverBudget": 0,
-  "coldWriteBacks": 0, "backfilled": 0, "backfillSkipped": 0
+  "coldWriteBacks": 0, "backfilled": 0, "backfillSkipped": 0,
+  "render": {
+    "snapshotCount": 0, "snapshotMs": 0, "snapshotMaxMs": 0, "lastUnits": 0,
+    "pages": [], "clients": [], "reports": 0, "dropped": 0
+  }
 }
 ```
+
+`render` 只在 `renderTiming=true` 时有值：`pages` 是服务端每页的
+`{kind, ms, maxMessages, records, bytes}`，`clients` 是浏览器回传的
+`{kind, rows, firstRowMs, settleMs, longTasks, blockingMs, maxTaskMs, heapMB}`。
+读法与实测见 [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)。
 
 判断某能力是否真的在起作用，看命中计数而不是 `patches`：
 
@@ -201,9 +220,10 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
 端口可能不是 3080。看 `dsh web` 启动日志里打印的 URL，或 `dsh web --help` 确认。
 
 **改完配置没反应**
-三种情况：`fastTurnOutline` / `chunkedMaterialize` / `zeroCopyFork` 只在安装时读一次，
-改了要重启；`backfillOnBoot` 相关的补行任务在启动 15 秒后才跑；其余开关通过
-`config.set` 修改后即时生效。
+三种情况：`fastTurnOutline` / `chunkedMaterialize` / `zeroCopyFork` /
+`maxInitialMessages` / `maxPageBytes` 只在安装时读一次，改了要重启；
+`clientContainment` 由浏览器在页面启动时取一次，改完刷新页面；`backfillOnBoot`
+相关的补行任务在启动 15 秒后才跑；其余开关通过 `config.set` 修改后即时生效。
 
 **没有任何 `[dsh-perf]` 日志且 `stats.get` 也连不上**
 插件没被加载。检查 `dsh --profile web --dump-config` 里是否有 `large-proj-perf`
@@ -219,6 +239,12 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
   dsh 上插件能力已基本为零（v1.10.0 移除三项依赖旧结构的能力后，0.1.x 只剩零拷贝
   fork 与分片 materialize），因此直接由门禁拒绝，而不是让用户装上一个近乎空转的
   插件。0.3.x 上会被同样拒绝，届时需要新版本插件。
+- **打开一个会话的字节大头不是消息，是投影**：实测一次打开 74 KB 消息 +
+  **6.76 MB 投影**（`turnOutline` 装着全部 turn）。这不是插件能削减的部分，
+  诊断数据与上游建议见 [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)。
+- **浏览器侧没有虚拟滚动**（上游 `ChatFlow` 直接 `entries.map()`）。插件只能用
+  `content-visibility` 减轻离屏行的布局代价，不能减少挂载数量；向上翻页会持续
+  累积 DOM 与堆（实测约 73 KB/行）。
 - **`retired` 补丁状态当前无使用者**：v1.10.0 移除了唯一会设置它的能力。保留该状态
   是因为它是「上游吸收能力后补丁主动让位」的唯一表达。
 
@@ -228,7 +254,7 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
 # 前置：把全局 dsh 的嵌套依赖 junction 到仓库（仓库本身不含 node_modules）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 
-# 全套 10 个套件（运行器会打印实测断言总数，当前 206）
+# 全套 11 个套件（运行器会打印实测断言总数，当前 250）
 npm test
 ```
 
@@ -250,6 +276,7 @@ node tools/runtime-probe/run.mjs --home <隔离 home> --agents <agents home> \
 |---|---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 维护者 | 问题分类、各能力的探测与实现、装配契约、如何新增能力 |
 | [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md) | 维护者 | 时间/空间两维度的实测数据、测量边界、已移除能力的记录 |
+| [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md) | 维护者 | 浏览器渲染链路：静态机制、真实浏览器实测、瓶颈排序与上游建议 |
 | [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | 维护者 | 版本矩阵、0.2.2 的五处破坏性变更、插件清单规范 |
 | [docs/HARNESS-COMPARISON.md](docs/HARNESS-COMPARISON.md) | 参考 | 其他 coding agent harness 怎么处理长会话 |
 | [docs/PUBLISHING.md](docs/PUBLISHING.md) | 发布者 | 发布流程与约定 |

@@ -151,5 +151,22 @@ function renderMarkdown(r) {
       lines.push('回写记录：', '', '```', JSON.stringify(w.coldWriteBackRecent, null, 2), '```', '')
     }
   }
+  const h = r.scenarios.H
+  if (h?.ok === true) {
+    lines.push('## H 渲染链路的分页载荷', '',
+      row(['配置', '消息', '记录', '记录字节', '响应字节', '冷读', '热读', '投影 key', '投影字节', '投影']),
+      row(['---', '---', '---', '---', '---', '---', '---', '---', '---', '---']))
+    for (const [label, v] of [['上游（500）', h.result.upstream], ['maxInitialMessages=25', h.result.capped]]) {
+      lines.push(row([
+        label, String(v.messages), String(v.records), String(v.recordsBytes), String(v.bytes),
+        `${v.coldMs} ms`, `${v.warmMs} ms`, String(v.projectionKeys), String(v.projectionBytes), `${v.projectionMs} ms`,
+      ]))
+    }
+    lines.push('', `renderTiming 计时点记录：上游 ${h.result.upstream.renderPages.length} 条 / 截断 ${h.result.capped.renderPages.length} 条`, '')
+    const rows = [...h.result.upstream.renderPages, ...h.result.capped.renderPages]
+    if (rows.length > 0) {
+      lines.push('```', JSON.stringify(rows, null, 2), '```', '')
+    }
+  }
   return lines.join('\n') + '\n'
 }
