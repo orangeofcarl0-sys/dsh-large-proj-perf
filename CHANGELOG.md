@@ -50,6 +50,14 @@
 - `docs/PUBLISHING.md`、README、本文件指向该策略；`tests/verify_docs.mjs` 增加
   `package.json` ↔ CHANGELOG 首条版本的一致性断言。
 
+### 元数据
+
+- `package.json` 的 `description` 与 `locale/{zh,en}.json` 补上浏览器侧离屏行
+  containment 的效果（批量翻页阻塞约 −47%）与渲染耗时诊断。
+- README 的「最近重要更新」补 1.12.0 的渲染里程碑与 1.16.0；「能力与效果」表补
+  containment 的最长任务指标，并明确 `clientContainment` 是唯一有实测收益的
+  渲染优化、`renderTiming` 只采集数据。
+
 <a id="v1-16-0"></a>
 ## [1.16.0] — 2026-11-13 — ⚠️ 重要（文档归一 + 结构债）
 

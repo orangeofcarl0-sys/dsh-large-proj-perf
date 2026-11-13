@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "大会话性能优化",
-    "description": "降低数十万事件长会话的打开延迟与内存占用：turnOutline 折叠从 O(n²) 改 O(n)（冷读 21.2s → 3.0s）、事件缓存按字节限容（稳态 RSS 1324 → 690 MB）、分片 materialize 消除超大会话落盘的 RangeError、零拷贝 fork，以及 V8 heap 上限告警。"
+    "description": "降低数十万事件长会话的打开延迟与内存占用：turnOutline 折叠从 O(n²) 改 O(n)（冷读 21.2s → 3.0s）、事件缓存按字节限容（稳态 RSS 1324 → 690 MB）、浏览器侧离屏行 containment（批量翻页阻塞约 −47%）、分片 materialize 消除超大会话落盘的 RangeError、零拷贝 fork，以及渲染耗时诊断与 V8 heap 上限告警。"
   }
 }

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Large Session Performance",
-    "description": "Cuts the load latency and memory footprint of very large sessions: turnOutline folding goes from O(n²) to O(n) (cold read 21.2s → 3.0s), event caches are capped by bytes instead of entry count (steady-state RSS 1324 → 690 MB), chunked materialize removes the RangeError on huge persistence writes, plus zero-copy fork and a V8 heap-limit warning."
+    "description": "Cuts the load latency and memory footprint of very large sessions: turnOutline folding goes from O(n²) to O(n) (cold read 21.2s → 3.0s), event caches are capped by bytes instead of entry count (steady-state RSS 1324 → 690 MB), offscreen-row containment in the browser cuts batch-paging blocking by about 47%, chunked materialize removes the RangeError on huge persistence writes, plus zero-copy fork, render-timing diagnostics and a V8 heap-limit warning."
   }
 }
