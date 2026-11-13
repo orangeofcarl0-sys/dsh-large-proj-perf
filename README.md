@@ -190,8 +190,8 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
 heartbeatMaxLagMs, streams, timeline}`；`jumps` 是服务端识别出的回合跳转次数
 （连续分页聚合）。读法与实测见 [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)。
 
-诊断模式还会暴露 `window.__dshPerf`：`state()` 看流表与最近样本，
-`jumpToFirst()` / `scrollTest({rounds})` 驱动固定动作。
+诊断模式还会暴露 `window.__dshPerf`：`state()` 看流表、WS 帧与最近样本，
+`jumpToTurn(n)` / `scrollTest({rounds})` / `benchMarkdown({text})` 驱动固定动作。
 
 判断某能力是否真的在起作用，看命中计数而不是 `patches`：
 
@@ -260,7 +260,7 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
 # 前置：把全局 dsh 的嵌套依赖 junction 到仓库（仓库本身不含 node_modules）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 
-# 全套 11 个套件（运行器会打印实测断言总数，当前 270）
+# 全套 11 个套件（运行器会打印实测断言总数，当前 276）
 npm test
 ```
 

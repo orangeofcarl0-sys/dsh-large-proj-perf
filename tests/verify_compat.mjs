@@ -366,6 +366,15 @@ if (typeof clientRel === 'string' && clientRel.startsWith('./')) {
   check('client manifest: tracks jump and scroll windows',
     clientSrc.includes("kind: 'jump'") && clientSrc.includes("kind: 'scroll'")
       && clientSrc.includes('data-chat-history'))
+  check('client manifest: records WS frame arrival for the transport split',
+    clientSrc.includes('remote.streams') && clientSrc.includes('frameArrivalMs')
+      && clientSrc.includes('addEventListener(\'message\', onFrame)'))
+  check('client manifest: exposes jumpToTurn and the markdown benchmark',
+    clientSrc.includes('jumpToTurn: function') && clientSrc.includes('benchMarkdown: function'))
+  check('client manifest: markdown benchmark uses the seeded primitives',
+    clientSrc.includes("require('@deepseek-ai/dsh-client-ui-primitives')")
+      && clientSrc.includes('extractMarkdownPlainText') && clientSrc.includes('FenceMathBlock')
+      && clientSrc.includes('useCodeHighlighter'))
 }
 
 // ---- 渲染链路上游形状（docs/RENDER-ANALYSIS.md 的静态前提）----
@@ -409,6 +418,21 @@ check('render attribution: turn marks expose aria-busy while jumping',
   src('dsh-client-ui-chat', 'src/client/chat/TurnNavigator.tsx').includes('aria-busy'))
 check('render attribution: the scroll container is a stable attribute',
   src('dsh-client-ui-conversation', 'src/client/skeleton/ConversationContent.tsx').includes('data-conversation-scroll'))
+
+// ---- 传输分段所依赖的上游形状（v1.14）----
+// 帧到达时间戳靠 `remote.streams.socket`（TS private，运行时是普通属性）；
+// 响应腿再拆 encode 靠 stream-server 的 stringify + 串行写队列。
+const streamClientSrc = src('dsh-api-gateway', 'src/client/stream-client.ts')
+check('render attribution: the mux socket is a plain runtime property',
+  streamClientSrc.includes('this.socket = socket'), 'plugin attaches a message listener')
+check('render attribution: frames are received synchronously from the socket listener',
+  streamClientSrc.includes("addEventListener(\"message\", received)") || streamClientSrc.includes("addEventListener('message', received)"),
+  'frame -> item is microtasks only')
+const streamServerSrc = src('dsh-api-gateway', 'src/stream-server.ts')
+check('render attribution: the server stringifies and serializes writes per item',
+  streamServerSrc.includes('JSON.stringify(message)') && streamServerSrc.includes('this.writes = delivery'),
+  'encode bucket is measurable out of band')
+
 
 
 

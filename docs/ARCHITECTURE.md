@@ -236,11 +236,20 @@ dsh 的客户端模块表按「经典脚本 + 惰性工厂」加载：`package.j
     区分 `session event stream` / `session control stream` 等逻辑流，记录
     「打开 → 首个 item」的时间。这是「首帧到底是谁」的唯一判据；
     只在诊断模式安装（它会改写应用所有逻辑流的公共入口）；
+  - **WS 帧时间戳**：从 `remote.streams.socket`（TS private，运行时是普通属性）
+    挂一个 `message` 监听器，记录 `event.timeStamp`（真正的到达时刻）、帧字节数与
+    `streamId → endpoint` 归属。**归因必须用 `timeStamp`**：监听器自身可能被
+    应用解析大帧后的微任务检查点推迟；实测长会话里 `timeStamp` 比监听器执行早
+    224 ms，用监听器时间会把服务端成本算到浏览器头上；
   - 窗口：首屏（导航 → 首行 → 首帧 → 稳定）、回合跳转
     （`data-chat-history` 进入 loading 到行数稳定）、滚动跳变
     （逐帧 `scrollTop` + 锚点行漂移 + 输入意图）；
   - 回传 `perf.report`（独立 64 KiB 上限）；非 200 时只丢最旧一半，不清空整队。
-- `window.__dshPerf`：`state()` / `jumpToFirst()` / `scrollTest({rounds})` / `flush()`。
+- `window.__dshPerf`：`state()` / `jumpToTurn(n)` / `scrollTest({rounds})` /
+  `benchMarkdown({text, iterations})` / `flush()`。`benchMarkdown` 从 seed 模块表
+  `require('@deepseek-ai/dsh-client-ui-primitives')`，分别跑 GFM 解析、分离容器
+  的 `MarkdownText` 挂载、`FenceMathBlock`、`useCodeHighlighter` 回调；
+  离屏代码块被 `IntersectionObserver` 门控，**不能**用 `CodeBlock` 量高亮。
 
 **硬约束**：`exports["./client"]` 指向的文件缺失会让整个 `clientModules`
 服务**启动失败**（不是降级）。`tests/verify_compat.mjs` 有断言同时检查声明、
