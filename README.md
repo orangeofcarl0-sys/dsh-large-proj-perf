@@ -275,6 +275,11 @@ npm test
 `e2e_real_components` 用真实实现类（原型链驱动）验证补丁装上后的行为；其余套件
 覆盖逻辑与边界。
 
+**版本号只在发布时决定**：开发轮次的变更先记入 `CHANGELOG.md` 的 `[Unreleased]`，
+不逐次改 `package.json`。选号规则与发布清单见
+[`docs/VERSIONING.md`](docs/VERSIONING.md)；`tests/verify_docs.mjs` 会断言
+`package.json` 与 CHANGELOG 首条版本一致。
+
 这三层都**不验证真实 dsh 进程里的调用链**。那需要起一个隔离实例并驱动 HTTP RPC，
 工具在 [`tools/runtime-probe/`](tools/runtime-probe/README.md)：
 

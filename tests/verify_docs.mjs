@@ -31,6 +31,7 @@ const DOCS = [
   'docs/HARNESS-COMPARISON.md',
   'docs/COMPATIBILITY.md',
   'docs/PUBLISHING.md',
+  'docs/VERSIONING.md',
   'tools/runtime-probe/README.md',
 ]
 
@@ -176,6 +177,30 @@ check('docs: backticked repository paths exist', deadRefs === 0, `${deadRefs} de
 // ---- 5. 渲染文档的体量上限（1.16 起 ≤300 行）----
 const renderLines = readFileSync(join(root, 'docs/RENDER-ANALYSIS.md'), 'utf8').split('\n').length - 1
 check('docs: RENDER-ANALYSIS stays under 300 lines', renderLines <= 300, `${renderLines} lines`)
+
+// ---- 6. 版本号：package.json ↔ CHANGELOG 首条，且严格递减 ----
+// 规则见 docs/VERSIONING.md：版本在发布时决定，CHANGELOG 第一条就是当前发布。
+{
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+  const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8')
+  const versions = [...changelog.matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)].map((match) => match[1])
+  check('versioning: package.json matches the first CHANGELOG entry',
+    versions[0] === pkg.version, `${pkg.version} vs ${versions[0]}`)
+  check('versioning: Unreleased section exists', /^## \[Unreleased\]/m.test(changelog))
+
+  const parse = (value) => value.split('.').map(Number)
+  const isNewer = (left, right) => {
+    const a = parse(left)
+    const b = parse(right)
+    for (let i = 0; i < 3; i++) {
+      if (a[i] !== b[i]) return a[i] > b[i]
+    }
+    return false
+  }
+  const descending = versions.every((value, index) => index === 0 || isNewer(versions[index - 1], value))
+  check('versioning: CHANGELOG versions strictly descend', descending, versions.join(' '))
+  check('versioning: no duplicate CHANGELOG version', new Set(versions).size === versions.length)
+}
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)

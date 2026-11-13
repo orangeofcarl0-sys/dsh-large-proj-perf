@@ -98,12 +98,15 @@ git push origin v<version>
 
 ## 版本号策略
 
-- 插件版本（`1.x.y`）与 dsh 版本区间各自独立演进。
-- **仅扩展支持的 dsh 版本、不改任何插件行为** → patch。
-- **新增能力，或适配 dsh 破坏性变更并改代码** → minor。
-- **破坏插件自身 API**（配置键移除、导出变更） → major。
+选号规则、开发中的 `[Unreleased]` 约定、预发布号与发错处理见
+[VERSIONING.md](VERSIONING.md)。发布相关的两条硬约束：
+
+- **版本号只在发布时决定**：开发轮次不逐次改 `package.json`，变更先记在
+  `CHANGELOG.md` 的 `[Unreleased]`；发布时再按变更性质选 MAJOR / MINOR / PATCH。
+- **`engines.dsh` 收紧算 MAJOR**：即使用户代码零改动，旧 dsh 会被加载门禁拒绝。
 
 升级 dsh 大版本（如 0.3）时，**必须同步更新 `engines.dsh` 的上界**，否则 dsh 会因
 门禁跳过本插件（见 `docs/COMPATIBILITY.md`「两个版本的区分」）。
 
 **版本号以 `package.json` 为唯一来源。** 文档中不写死版本号，避免漂移。
+`CHANGELOG.md` 的第一个版本条目必须与它相等——`tests/verify_docs.mjs` 会断言。

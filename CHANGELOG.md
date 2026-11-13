@@ -12,6 +12,9 @@
 > [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)。下文提到的
 > `RUNTIME-ANALYSIS.md` / `MEMORY-ANALYSIS.md` 已于 1.10.0 并入 MEASUREMENTS，
 > 路径只作文物引用。
+>
+> **版本号规则见 [docs/VERSIONING.md](docs/VERSIONING.md)**：版本在发布时决定，
+> 开发中的变更先记在 `[Unreleased]`，不逐次改 `package.json`。
 
 ## 重要版本速览
 
@@ -39,6 +42,13 @@
 纯文档修补不标重要——例如 **1.10.1 不标**，它只修文档事实错误，行为零变化。
 
 ## [Unreleased]
+
+### 文档
+
+- 新增 [docs/VERSIONING.md](docs/VERSIONING.md)：**版本号只在发布时决定**；记录
+  npm 序列 `1.4.0 → 1.10.1 → 1.16.0` 的跳跃原因；`engines.dsh` 收紧一律算 MAJOR。
+- `docs/PUBLISHING.md`、README、本文件指向该策略；`tests/verify_docs.mjs` 增加
+  `package.json` ↔ CHANGELOG 首条版本的一致性断言。
 
 <a id="v1-16-0"></a>
 ## [1.16.0] — 2026-11-13 — ⚠️ 重要（文档归一 + 结构债）
