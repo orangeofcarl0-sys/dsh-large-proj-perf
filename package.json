@@ -1,6 +1,6 @@
 {
   "name": "dsh-large-proj-perf",
-  "version": "1.16.0",
+  "version": "1.16.1",
   "description": "DSH 大会话性能插件：turnOutline 折叠加速（冷读 21.2s → 3.0s）+ 事件缓存字节预算（RSS 1324 → 690 MB）+ 离屏行 containment（批量翻页阻塞约 −47%）+ 分片 materialize + 零拷贝 fork + 渲染耗时诊断",
   "type": "module",
   "main": "lib/index.js",
