@@ -260,7 +260,7 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
 # 前置：把全局 dsh 的嵌套依赖 junction 到仓库（仓库本身不含 node_modules）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 
-# 全套 11 个套件（运行器会打印实测断言总数，当前 276）
+# 全套 11 个套件（运行器会打印实测断言总数，当前 278）
 npm test
 ```
 

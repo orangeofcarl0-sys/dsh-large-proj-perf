@@ -432,6 +432,13 @@ const streamServerSrc = src('dsh-api-gateway', 'src/stream-server.ts')
 check('render attribution: the server stringifies and serializes writes per item',
   streamServerSrc.includes('JSON.stringify(message)') && streamServerSrc.includes('this.writes = delivery'),
   'encode bucket is measurable out of band')
+check('render attribution: the mux send accepts a completion callback',
+  streamServerSrc.includes('socket.send(text') && streamServerSrc.includes('compress'),
+  'plugin wraps ws send to split queue wait from deflate+write')
+const renderTimingSrc = readFileSync(new URL('../lib/render-timing.js', import.meta.url), 'utf8')
+check('render attribution: plugin records ws send queue and completion',
+  renderTimingSrc.includes('installSendTiming') && renderTimingSrc.includes('sentAt')
+    && renderTimingSrc.includes("'@deepseek-ai/dsh/package.json'"))
 
 
 

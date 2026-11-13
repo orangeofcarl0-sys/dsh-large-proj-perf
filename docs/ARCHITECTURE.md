@@ -202,6 +202,13 @@ v1.9.0 及之前的一个真实 bug：**打开 `backfillOnBoot` 不会补跑扫�
 `loadThrough`（逐页回翻、全部攒完才发布一次）在服务端的指纹；单页普通翻页
 不记成跳转。
 
+还有 **`ws.send` 计时**：从 dsh 安装根解析 `ws`（ESM → `process.argv[1]` →
+dsh-session 反推，三条候选），包装 `WebSocket.prototype.send` 的回调，只记录
+≥64 KiB 的帧，写进 `stats.render.sends = [{t, sentAt, bytes}]`。它把「服务端产出
+之后」再拆成写队列等待（`server.t → send 调用`）与 deflate+写入
+（`send → 回调`）；配合客户端 `event.timeStamp` 得到网络+inflate。实测冷读后
+deflate 从 207 ms 涨到 1 493 ms，写队列在热读时精确等于 control 帧的写耗时。
+
 > **为什么能包装内部对象**：`sessionController` 是 cordis 服务，其构造函数把
 > `historyController` / `webController` 放在实例上（`dsh-api-session-controller`
 > `src/index.ts:208-210`）。二者都是普通对象，直接替换方法即可；这与
