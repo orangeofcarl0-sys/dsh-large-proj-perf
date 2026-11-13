@@ -485,4 +485,108 @@ export async function scenarioH(opts) {
   }
 }
 
-export const SCENARIOS = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, G: scenarioG, H: scenarioH }
+// ---------- 场景 I：消息体主导的重会话（v1.13）----------
+//
+// 与 H 互补：H 的会话是 30 000 turn、小消息，测的是投影主导的开销；
+// heavy 会话是 300 turn、工具输出主导，测的是「页字节 → 渲染成本」。
+// 两个 fixture 用不同轴，避免把「turn 数」和「消息体大小」混为一谈。
+//
+// 同时近似 `session/control` 的全量基线：把每个会话的投影各取一次并累加字节。
+export const HEAVY = 'session-probe-heavy'
+
+export async function scenarioI(opts) {
+  return withInstance({ ...opts, extraEnv: { DSH_PERF_RENDER_TIMING: 'true' } }, async ({ client }) => {
+    await client.statsReset()
+    const address = { kind: 'session', sessionId: HEAVY }
+    const startedAt = performance.now()
+    const page = await client.rpc('session', 'events', { address, ...RENDER_PAGE })
+    const coldMs = performance.now() - startedAt
+    const records = page.value?.records ?? []
+    const bytes = JSON.stringify(page.value ?? null).length
+    const recordsBytes = JSON.stringify(records).length
+    const messages = countMessages(records)
+
+    const warmStart = performance.now()
+    const warm = await client.rpc('session', 'events', { address, ...RENDER_PAGE })
+    const warmMs = performance.now() - warmStart
+
+    const projStart = performance.now()
+    const projections = await client.rpc('session', 'projections', { sessionId: HEAVY })
+    const projectionMs = performance.now() - projStart
+    const projectionBytes = JSON.stringify(projections.value?.values ?? null).length
+
+    // 近似 control 基线：所有会话的投影值之和（control 一帧里装的就是这些）。
+    let baselineBytes = 0
+    let baselineSessions = 0
+    try {
+      const listed = await client.rpc('session', 'list', {}, { argName: '_request' })
+      const ids = (listed.value?.items ?? []).map((item) => item.sessionId).filter((id) => typeof id === 'string')
+      for (const id of ids.slice(0, 12)) {
+        const one = await client.rpc('session', 'projections', { sessionId: id })
+        baselineBytes += JSON.stringify(one.value?.values ?? null).length
+        baselineSessions += 1
+      }
+    } catch (error) {
+      baselineBytes = -1
+    }
+
+    const stats = await client.stats()
+    return {
+      records: records.length,
+      messages,
+      warmRecords: warm.value?.records?.length ?? 0,
+      bytes,
+      recordsBytes,
+      coldMs: +coldMs.toFixed(1),
+      warmMs: +warmMs.toFixed(1),
+      projectionKeys: Object.keys(projections.value?.values ?? {}).length,
+      projectionMs: +projectionMs.toFixed(1),
+      projectionBytes,
+      baselineSessions,
+      baselineBytes,
+      renderPages: stats.value.render?.pages ?? [],
+      patches: stats.value.patches,
+    }
+  })
+}
+
+// ---------- 场景 J：回合跳转的 burst 聚合（v1.13）----------
+//
+// `loadThrough` 在服务端的指纹是「连续多次 beforeSeq 回翻，间隔很短」。
+// 这里用同一形态直接打 `session/events`，验证 render-timing 把它们聚合成
+// 一条 kind='jump' 记录（而不是 N 条普通 older 页）。
+export async function scenarioJ(opts) {
+  return withInstance({ ...opts, extraEnv: { DSH_PERF_RENDER_TIMING: 'true' } }, async ({ client }) => {
+    await client.statsReset()
+    const address = { kind: 'session', sessionId: LONG }
+    await client.rpc('session', 'events', { address, maxMessages: 50 })
+    let beforeSeq
+    const pages = []
+    for (let i = 0; i < 5; i++) {
+      const request = { address, maxMessages: 50, ...(beforeSeq === undefined ? {} : { beforeSeq }) }
+      const page = await client.rpc('session', 'events', request)
+      const records = page.value?.records ?? []
+      if (records.length === 0) break
+      pages.push(records.length)
+      const first = records[0]?.event?.seq
+      if (typeof first !== 'number' || first <= 0) break
+      beforeSeq = first
+    }
+    // 等 burst 定时器（JUMP_BURST_GAP_MS = 1500）落盘
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    const stats = await client.stats()
+    const render = stats.value.render ?? {}
+    return {
+      pages,
+      jumps: render.jumps ?? 0,
+      jumpRecords: (render.pages ?? []).filter((entry) => entry.kind === 'jump'),
+      olderPages: (render.pages ?? []).filter((entry) => entry.kind === 'older').length,
+    }
+  })
+}
+
+export const SCENARIOS = {
+  A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD,
+  E: scenarioE, F: scenarioF, G: scenarioG, H: scenarioH,
+  I: scenarioI, J: scenarioJ,
+}

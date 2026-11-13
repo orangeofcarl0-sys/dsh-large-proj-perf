@@ -357,6 +357,15 @@ if (typeof clientRel === 'string' && clientRel.startsWith('./')) {
     // 配置未开启 renderTiming 就整体拆除。
     clientSrc.includes('config.clientContainment === true')
       && clientSrc.includes('config.renderTiming !== true'))
+  check('client manifest: collector reads spec LoAF blockingDuration',
+    clientSrc.includes('blockingDuration'), 'falls back to duration-50 only when absent')
+  check('client manifest: exposes the diagnostic entrypoint',
+    clientSrc.includes('window.__dshPerf = api'))
+  check('client manifest: labels logical streams through $stream',
+    clientSrc.includes("ctx.get('remote')") && clientSrc.includes('original.call(this, wrapped)'))
+  check('client manifest: tracks jump and scroll windows',
+    clientSrc.includes("kind: 'jump'") && clientSrc.includes("kind: 'scroll'")
+      && clientSrc.includes('data-chat-history'))
 }
 
 // ---- 渲染链路上游形状（docs/RENDER-ANALYSIS.md 的静态前提）----
@@ -380,6 +389,27 @@ check('render: first page is still 500 messages',
 check('render: projection snapshot is still synchronous (timing point is safe to wrap)',
   /snapshot\(\s*session: Session,\s*keys\?: ProjectionKeySelection,?\s*\): ProjectionSnapshot/.test(
     src('dsh-session-projection', 'src/index.ts').replace(/\n\s*/g, ' ')))
+
+// ---- 渲染归因所依赖的上游形状（v1.13）----
+// 这些是「分段计时 / 跳转 / 滚动」三类测量的前提。上游一旦改名或改结构，
+// 对应采集就应降级为 streams:null / 只测 DOM，而不是猜。
+const journalSrc = src('dsh-api-gateway', 'src/client/journal-stream.ts')
+check('render attribution: logical streams carry a name and an opener',
+  journalSrc.includes('name: options.name') && journalSrc.includes('open: signal =>'),
+  'client wraps $stream to label session event vs control streams')
+const controlSrc = src('dsh-api-session-controller', 'src/client/transport.ts')
+check('render attribution: control and event streams have distinct names',
+  controlSrc.includes("'session event stream'") && controlSrc.includes("'session control stream'"))
+check('render attribution: loadThrough still publishes the whole prefix once',
+  sessionClientSrc.includes('prependWindow(pending.pages.reverse().flat()'),
+  'server-side burst detection mirrors this single-publish shape')
+check('render attribution: history status is exposed on the DOM',
+  src('dsh-client-ui-chat', 'src/client/chat/ChatView.tsx').includes('data-chat-history'))
+check('render attribution: turn marks expose aria-busy while jumping',
+  src('dsh-client-ui-chat', 'src/client/chat/TurnNavigator.tsx').includes('aria-busy'))
+check('render attribution: the scroll container is a stable attribute',
+  src('dsh-client-ui-conversation', 'src/client/skeleton/ConversationContent.tsx').includes('data-conversation-scroll'))
+
 
 
 console.log(failures === 0 ? (warns > 0 ? `\nALL PASS (${warns} warning(s))` : '\nALL PASS') : `\n${failures} FAIL`)

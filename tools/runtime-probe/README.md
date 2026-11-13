@@ -68,7 +68,7 @@ node tools/runtime-probe/run.mjs \
 `--scenario` 可接受 `A,B,C` 子集。报告写到 `<out>/report.json` 与 `report.md`，
 多次调用**累积合并**（不会互相覆盖）。
 
-## 八个场景
+## 十个场景
 
 | 场景 | 驱动 | 回答什么问题 |
 |---|---|---|
@@ -79,10 +79,31 @@ node tools/runtime-probe/run.mjs \
 | E | `debug.fork` + 同进程开关切换 | 补丁本身值多少（原生 vs 零拷贝）？ |
 | F | 两次独立进程 + 环境变量定值 | 分片 materialize 的帧数/字节/耗时差异？ |
 | G | 清缓存 → 冷读 → 重启 → 再读 | 冷读回写的跨进程收益（负结果） |
-| H | `session/events` 的 500 条窗口 + `session/projections` | 打开会话的字节构成、`maxInitialMessages` 截断效果 |
+| H | `session/events` 的 500 条窗口 + `session/projections` | 长会话（投影主导）的字节构成与截断效果 |
+| I | 重会话的首屏/翻页 + 各会话投影求和 | 消息主导型会话的页字节（1.7 MB/页）与 control 基线量级 |
+| J | 连续 `beforeSeq` 回翻 | 服务端是否把 `loadThrough` 的连续分页聚合成一次 jump |
 
-> **只有服务端**。浏览器侧的首行/长任务需要 `lib/client.js` 采集，由
-> `docs/RENDER-ANALYSIS.md` 记录的浏览器实测流程覆盖——本工具不驱动浏览器。
+> **只有服务端**。浏览器侧的分段计时、回合跳转窗口与滚动跳变由
+> `lib/client.js` 采集（`renderTiming=true`），通过 `window.__dshPerf` 驱动，
+> 见 `docs/RENDER-ANALYSIS.md` §3.2/§3.4/§3.5——本工具不驱动浏览器。
+
+## 素材生成
+
+```sh
+# 长会话：30 000 turn、小消息（投影主导）
+node tools/runtime-probe/make-session-cli.mjs --home "$RT/home" \
+  --id session-probe-long --events 240000 --pad 700 --cwd 'F:\dsh-rt\probe-workspace'
+
+# 重会话：300 turn、620 次工具调用（消息主导，首屏约 1.7 MB）
+node tools/runtime-probe/make-session-cli.mjs --home "$RT/home" \
+  --id session-probe-heavy --turns 300 --profile tools --tool-bytes 30000 --seed 42 \
+  --cwd 'F:\dsh-rt\probe-workspace'
+```
+
+`--profile` 三档：`plain`（单行随机文本）、`markdown`（标题/列表/表格/围栏代码/
+公式/CJK）、`tools`（追加 bash 日志、文件读、unified diff 的 `tool/call` +
+`tool/result`）。生成后用真实后端**读回自检**（事件数、turn 数、工具配对），
+失败直接退出 1，不打印路径。
 
 ## 关键约束
 

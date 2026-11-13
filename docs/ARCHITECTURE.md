@@ -194,8 +194,13 @@ v1.9.0 及之前的一个真实 bug：**打开 `backfillOnBoot` 不会补跑扫�
 **`lib/render-timing.js`（诊断，默认关）**
 包装两个点：`sessionProjections.snapshot`（同步热路径，记录耗时与单元数）与
 `sessionController` 内部 `webController.follow` / `historyController.events`
-（记录首帧耗时、事件数、序列化字节、`hasMore`）。写进
-`stats.render.{snapshotCount, snapshotMs, snapshotMaxMs, lastUnits, pages[]}`。
+（记录首帧耗时、`startedAt`、事件数、序列化字节、`sessionId`/`beforeSeq`）。
+写进 `stats.render.{snapshotCount, snapshotMs, snapshotMaxMs, lastUnits, pages[]}`。
+
+另有 **jump burst 聚合**：连续 `older` 页间隔 < `JUMP_BURST_GAP_MS`（1500 ms）
+时合并成一条 `kind:'jump'` 记录（页数、事件数、字节、总耗时）。这是
+`loadThrough`（逐页回翻、全部攒完才发布一次）在服务端的指纹；单页普通翻页
+不记成跳转。
 
 > **为什么能包装内部对象**：`sessionController` 是 cordis 服务，其构造函数把
 > `historyController` / `webController` 放在实例上（`dsh-api-session-controller`
@@ -215,13 +220,27 @@ v1.9.0 及之前的一个真实 bug：**打开 `backfillOnBoot` 不会补跑扫�
 dsh 的客户端模块表按「经典脚本 + 惰性工厂」加载：`package.json` 声明
 `dsh.client = { platform: 'web' }` 与 `exports["./client"]`，文件形如
 `window.__ModuleLoader__.load({ id, factory })`（与官方 decoration 模板一致，无需构建）。
+客户端插件必须 `inject: ['remote']` 才拿得到 `ctx.get('remote')`——客户端 cordis
+的服务访问要显式声明。
 
 - `clientContainment`（默认开）：行数 >80 时在 flow 容器上打
   `data-dsh-perf-dense`，CSS 给第 30 行之后的离屏行加
   `content-visibility: auto; contain-intrinsic-size: auto 120px`。
-- `renderTiming`（默认关）：`PerformanceObserver` 收
-  `long-animation-frame` / `longtask`，`MutationObserver` 盯 flow 行数，
-  回传「导航 → 首行 / 稳定 / 长任务 / 堆」到 `perf.report`。
+- `renderTiming`（默认关）：
+  - `PerformanceObserver` 收 `long-animation-frame`（用规范字段
+    `blockingDuration`，并采 `renderStart` / `styleAndLayoutStart` / `scripts[]`），
+    缺失时退回 `longtask`；
+  - 100 ms 心跳（`scheduler.postTask` background，缺失时 `setTimeout`），
+    用来区分「真异步等待」与「大量短任务」；
+  - **`$stream` 钩子**：包装 `ctx.remote.$stream` 并保留 `options.name`，
+    区分 `session event stream` / `session control stream` 等逻辑流，记录
+    「打开 → 首个 item」的时间。这是「首帧到底是谁」的唯一判据；
+    只在诊断模式安装（它会改写应用所有逻辑流的公共入口）；
+  - 窗口：首屏（导航 → 首行 → 首帧 → 稳定）、回合跳转
+    （`data-chat-history` 进入 loading 到行数稳定）、滚动跳变
+    （逐帧 `scrollTop` + 锚点行漂移 + 输入意图）；
+  - 回传 `perf.report`（独立 64 KiB 上限）；非 200 时只丢最旧一半，不清空整队。
+- `window.__dshPerf`：`state()` / `jumpToFirst()` / `scrollTest({rounds})` / `flush()`。
 
 **硬约束**：`exports["./client"]` 指向的文件缺失会让整个 `clientModules`
 服务**启动失败**（不是降级）。`tests/verify_compat.mjs` 有断言同时检查声明、

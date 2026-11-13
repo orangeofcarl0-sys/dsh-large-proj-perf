@@ -40,8 +40,8 @@ DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长
 | **离屏行 containment** | 聊天列表没有虚拟滚动，已加载的每一行都参与布局 | 批量翻页阻塞 **2836 → 1489 ms**（-47%） | 开 |
 | 分片 materialize | 落盘时把整个会话序列化成一个巨大字符串 | 2 帧 → 6 帧，消除 `RangeError` | 开 |
 | 零拷贝 fork | fork 时逐事件深拷贝整个会话 | 直测 -16% ~ -21%（**但 UI 不走这条路**，见下） | 开 |
-| 渲染耗时诊断 | 打开会话慢在哪一段无从得知 | `renderTiming` 记录首行/稳定/长任务 + 服务端分页 | 关 |
-| 历史窗口预算 | 一页只按消息条数切，无字节上限 | 合成会话 70 KB/页，未触及；留给工具输出密集的会话 | 关 |
+| 渲染耗时诊断 | 打开会话慢在哪一段无从得知 | 分段计时（流→首行→首帧→稳定）、LoAF 脚本归属、跳转与滚动窗口 | 关 |
+| 历史窗口预算 | 一页只按消息条数切，无字节上限 | 长会话 70 KB/页、重会话 1.7 MB/页；默认不动，按需收紧 | 关 |
 | 冷读回写 | 冷读后把投影状态写成缓存行 | **无耗时收益**，只让列表读看到新数据 | 关 |
 | 冷会话补行 | 磁盘上的大会话没有投影缓存行 | 启动 15 s 后批量补写 | 关 |
 | heap 上限告警 | V8 heap 上限过低时无任何提示 | 启动时检查并告警 | — |
@@ -185,9 +185,13 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
 ```
 
 `render` 只在 `renderTiming=true` 时有值：`pages` 是服务端每页的
-`{kind, ms, maxMessages, records, bytes}`，`clients` 是浏览器回传的
-`{kind, rows, firstRowMs, settleMs, longTasks, blockingMs, maxTaskMs, heapMB}`。
-读法与实测见 [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)。
+`{kind, ms, startedAt, records, bytes}`，`clients` 是浏览器回传的
+`{kind, rows, firstRowMs, firstFrameMs, settleMs, longTasks, blockingMs, maxTaskMs,
+heartbeatMaxLagMs, streams, timeline}`；`jumps` 是服务端识别出的回合跳转次数
+（连续分页聚合）。读法与实测见 [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)。
+
+诊断模式还会暴露 `window.__dshPerf`：`state()` 看流表与最近样本，
+`jumpToFirst()` / `scrollTest({rounds})` 驱动固定动作。
 
 判断某能力是否真的在起作用，看命中计数而不是 `patches`：
 
@@ -196,6 +200,7 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
 | 零拷贝 fork 有没有被调用 | `zeroCopy`（长期 0 = 没被调用） |
 | 内存预算有没有在淘汰 | `memoryBudgetTrimmed`（>0 说明生效） |
 | 冷读回写 / 补行有没有跑 | `coldWriteBacks` / `backfilled` |
+| 有没有发生回合跳转 | `render.jumps` / `render.pages` 里的 `kind:'jump'` |
 
 ### 常见问题
 
@@ -244,7 +249,8 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
   诊断数据与上游建议见 [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)。
 - **浏览器侧没有虚拟滚动**（上游 `ChatFlow` 直接 `entries.map()`）。插件只能用
   `content-visibility` 减轻离屏行的布局代价，不能减少挂载数量；向上翻页会持续
-  累积 DOM 与堆（实测约 73 KB/行）。
+  累积 DOM 与堆（实测约 73 KB/行）。**回合跳转是最极端的路径**：一次跳到早期
+  turn 会挂载上千行（实测 +1 375 行、主线程阻塞 1.7 秒）。
 - **`retired` 补丁状态当前无使用者**：v1.10.0 移除了唯一会设置它的能力。保留该状态
   是因为它是「上游吸收能力后补丁主动让位」的唯一表达。
 
@@ -254,7 +260,7 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
 # 前置：把全局 dsh 的嵌套依赖 junction 到仓库（仓库本身不含 node_modules）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 
-# 全套 11 个套件（运行器会打印实测断言总数，当前 250）
+# 全套 11 个套件（运行器会打印实测断言总数，当前 270）
 npm test
 ```
 

@@ -221,6 +221,54 @@ const drain = async (iterator) => {
   for (const dispose of disposers.splice(0).reverse()) dispose()
 }
 
+// ---- 7. 分页记录带 startedAt / sessionId / beforeSeq ----
+{
+  const controller = makeController()
+  const { deps, stats, disposers } = makeDeps(controller, { renderTiming: true })
+  installRenderTiming(deps)
+  const before = Date.now()
+  await controller.historyController.events({ maxMessages: 2, address: { kind: 'session', sessionId: 's-1' } })
+  const page = stats.render.pages.at(-1)
+  check('render timing: page records startedAt', typeof page.startedAt === 'number' && page.startedAt >= before - 1000,
+    String(page.startedAt))
+  check('render timing: page records sessionId', page.sessionId === 's-1', String(page.sessionId))
+  check('render timing: page records beforeSeq (null on initial)', page.beforeSeq === null)
+  await controller.historyController.events({ maxMessages: 2, beforeSeq: 9, address: { kind: 'session', sessionId: 's-1' } })
+  check('render timing: older page records beforeSeq',
+    stats.render.pages.at(-1).beforeSeq === 9, String(stats.render.pages.at(-1).beforeSeq))
+  for (const dispose of disposers.splice(0).reverse()) dispose()
+}
+
+// ---- 8. 回合跳转的 burst 聚合 ----
+// `loadThrough` = 连续多次回翻、间隔很短。单页是普通翻页，不记成跳转。
+{
+  const controller = makeController()
+  const { deps, stats, disposers } = makeDeps(controller, { renderTiming: true })
+  installRenderTiming(deps)
+  await controller.historyController.events({ maxMessages: 2, beforeSeq: 40, address: { kind: 'session', sessionId: 's-2' } })
+  await controller.historyController.events({ maxMessages: 2, beforeSeq: 30, address: { kind: 'session', sessionId: 's-2' } })
+  await controller.historyController.events({ maxMessages: 2, beforeSeq: 20, address: { kind: 'session', sessionId: 's-2' } })
+  await new Promise((resolve) => setTimeout(resolve, 1800))
+  const jumps = stats.render.pages.filter((entry) => entry.kind === 'jump')
+  check('jump burst: consecutive older pages collapse into one jump', jumps.length === 1, String(jumps.length))
+  check('jump burst: aggregates page count', jumps[0]?.pages === 3, String(jumps[0]?.pages))
+  check('jump burst: aggregates records', jumps[0]?.records === 6, String(jumps[0]?.records))
+  check('jump burst: increments the counter', stats.render.jumps === 1, String(stats.render.jumps))
+  check('jump burst: keeps the session id', jumps[0]?.sessionId === 's-2', String(jumps[0]?.sessionId))
+  for (const dispose of disposers.splice(0).reverse()) dispose()
+}
+
+// ---- 9. 单页不记成跳转 ----
+{
+  const controller = makeController()
+  const { deps, stats, disposers } = makeDeps(controller, { renderTiming: true })
+  installRenderTiming(deps)
+  await controller.historyController.events({ maxMessages: 2, beforeSeq: 50 })
+  await new Promise((resolve) => setTimeout(resolve, 1800))
+  check('jump burst: a single older page is not a jump', stats.render.jumps === 0, String(stats.render.jumps))
+  for (const dispose of disposers.splice(0).reverse()) dispose()
+}
+
 if (failures > 0) {
   console.error(`\n${failures} FAIL`)
   process.exit(1)

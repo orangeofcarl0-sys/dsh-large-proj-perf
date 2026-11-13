@@ -17,6 +17,7 @@
 
 | 版本 | 类型 | 一句话 |
 |---|---|---|
+| [1.13.0](#1130-2026-11-13-重要测量) | **测量补全** | 四条缺口全部动手：重会话生成、回合跳转（+1375 行 / 阻塞 1.7 s）、打开路径分段归因、滚动跳变 |
 | [1.12.0](#1120-2026-11-13-重要性能) | **性能里程碑** | 首次测浏览器渲染：打开 7.4 s 到首行；离屏行 containment 让批量翻页阻塞 -47% |
 | [1.11.0](#1110-2026-11-11-重要破坏性) | **破坏性** | 支持范围收紧到 `>=0.2.2-rc.1 <0.3.0-0`；更旧的 dsh 上不再加载 |
 | [1.10.0](#1100-2026-11-11-重要破坏性) | **破坏性** | 移除三项在 0.2.2 上恒不生效的能力；配置键 22 → 17；修掉「改配置不生效」的晚绑定 bug |
@@ -29,6 +30,64 @@
 纯文档修补不标重要——例如 **1.10.1 不标**，它只修文档事实错误，行为零变化。
 
 ## [Unreleased]
+
+## [1.13.0] — 2026-11-13 — ⚠️ 重要（测量）
+
+**把 1.12 留下的四条测量缺口逐条闭合**，并修掉采集器里三个会污染结论的缺陷。
+
+### 修复的测量缺陷
+
+- **阻塞时长改用 LoAF 的 `blockingDuration`**（规范值：各长任务 -50 的累加 +
+  渲染段）。此前用 `duration - 50`，会系统性高估。
+- **首行时间不再经过 120 ms 防抖**：在 `MutationObserver` 回调（变更后的微任务）
+  里同步记录，防抖只留给 settle 判定。
+- **采集 `renderStart` / `styleAndLayoutStart` / `scripts[]`**，把长帧拆成
+  脚本 / 渲染 / 布局，并给出脚本 URL 归属。
+
+### 新增测量能力
+
+- **分段计时**：`performance.mark` 打在流打开 / 首个 item / 首行 / 首帧 / 稳定，
+  样本带最多 16 条时间线；配 100 ms 心跳（`heartbeatMaxLagMs`）区分「填异步等待」
+  与「大量短任务」。
+- **逻辑流标签**：包装 `ctx.remote.$stream` 并保留 `options.name`，区分
+  `session event stream` / `session control stream`，记录「打开 → 首个 item」。
+  只在 `renderTiming=true` 时安装（它会改写应用所有逻辑流的公共入口）。
+- **回合跳转窗口**：服务端把间隔 < 1 500 ms 的连续分页聚合成 `kind:'jump'`
+  （页数/事件数/字节/耗时）；客户端记录行数与 turn 范围的变化。
+- **滚动跳变**：逐帧采样 `scrollTop`，记录单帧最大位移、方向反转、锚点行漂移、
+  `scrollHeight` 变化与输入意图。
+- **`window.__dshPerf`**：`state()` / `jumpToFirst()` / `scrollTest({rounds})` / `flush()`。
+- `perf.report` 改用独立的 64 KiB body 上限；非 200 时只丢最旧一半，不再清空整队。
+
+### 新增素材
+
+- `make-session-cli.mjs` 支持 `--turns` / `--profile plain|markdown|tools` /
+  `--tool-bytes` / `--seed`。`tools` 档位按真实编码 agent 的字节分布生成
+  bash 日志、文件读与 unified diff。
+- **读回自检**：生成后用真实后端重新读出，核对事件数、turn 数、工具配对；
+  失败直接退出 1。顺带修正了生成器注释里的错误——工具生命周期由
+  `assistant/message` 的 `tool-call` 内容块声明，不是 `request/header.tools`。
+
+### 实测结论
+
+| 缺口 | 结果 |
+|---|---|
+| 消息体太小 | 重会话首屏 **1.73 MB**（长会话 74 KB 的 23 倍），投影只 68 KB——两轴分开 |
+| 回合跳转 | 跳到 turn 1：**+1 375 行、阻塞 1 723 ms、最长任务 1 575 ms**、服务端一次发布 18.3 MB |
+| 打开路径 | 拆成服务端首帧（热 52–188 ms）+ **约 500 ms 链路** + 100–260 ms 组装挂载；旧的「2.9 s 未归因」大部分其实是服务端时间 |
+| 滚动跳变 | containment 开/关的锚点漂移都是 **22 px**，未测到额外跳变；默认维持开启 |
+
+完整数据、剩余开放项与上游建议见 [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)。
+
+### 验证
+
+- `tests/test_render_timing.mjs` 30 → 40 条：`startedAt`/`sessionId`/`beforeSeq`、
+  jump burst 聚合（3 页合成 1 条）、单页不记跳转。
+- `verify_compat.mjs` 72 → 82 条：客户端新增标记、`$stream` 契约、
+  `loadThrough` 单次发布、`data-chat-history` / `aria-busy` /
+  `data-conversation-scroll` 三个 DOM 契约。
+- `tools/runtime-probe` 新增 **scenario I**（重会话载荷 + control 基线量级）与
+  **scenario J**（连续回翻 → 聚合为一次 jump）。
 
 ## [1.12.0] — 2026-11-13 — ⚠️ 重要（性能）
 
