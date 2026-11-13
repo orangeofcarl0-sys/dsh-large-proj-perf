@@ -12,8 +12,8 @@
 
 - 零拷贝补丁挂在 `SessionStore.prototype.fork` 上，而 dsh 0.2.2 的
   `session/fork` RPC 已经**不调用**该方法；
-- 预热的监听器排在 `dsh-api-session-controller` 之后，而后者在
-  `session/created` 的同步广播里就把所有投影 cell 建完了。
+- 冷会话的投影 cell 在 `session/created` 的同步广播里就被上游建满了，
+  插件的监听器只会看到 `alreadyHot`（warmup 已于 1.10.0 移除）。
 
 这两条都只有起真实进程才能发现。
 
@@ -65,8 +65,12 @@ node tools/runtime-probe/run.mjs \
   --scenario all --out "$RT/out"
 ```
 
-`--scenario` 可接受 `A,B,C` 子集。报告写到 `<out>/report.json` 与 `report.md`，
-多次调用**累积合并**（不会互相覆盖）。
+`--scenario` 可接受 `A,B,C` 子集；未知名字直接 exit 1。报告写到
+`<out>/report.json` 与 `report.md`，多次调用**累积合并**（不会互相覆盖）。
+
+> **turn 1 的停止条件**：`__dshPerf.jumpToTurn(1)` 在 30k turn 会话上会先让服务端
+> 传 300 页 / 239 800 事件 / 83.4 MB，随后客户端可能 OOM 重载。测到
+> `rows > 20 000` 就停，不要继续加码（RENDER-ANALYSIS §8）。
 
 ## 十个场景
 
@@ -74,7 +78,7 @@ node tools/runtime-probe/run.mjs \
 |---|---|---|
 | A | `stats.get` + 启动日志 | 补丁真实状态是什么？日志可见吗？ |
 | B | 清空投影缓存后冷读 | 不预热时打开大会话要多久、卡多久、吃多少内存？ |
-| C | `session/rename`（触发 resume → `session/created`） | 预热跑成了吗？跑成后快多少？ |
+| C | `session/rename`（触发 resume → 冷读） | resume 冷读要多久？之后的投影热读多快？ |
 | D | `session/fork` RPC | UI 的「分支会话」会调用零拷贝补丁吗？ |
 | E | `debug.fork` + 同进程开关切换 | 补丁本身值多少（原生 vs 零拷贝）？ |
 | F | 两次独立进程 + 环境变量定值 | 分片 materialize 的帧数/字节/耗时差异？ |
@@ -85,7 +89,8 @@ node tools/runtime-probe/run.mjs \
 
 > **只有服务端**。浏览器侧的分段计时、回合跳转窗口与滚动跳变由
 > `lib/client.js` 采集（`renderTiming=true`），通过 `window.__dshPerf` 驱动，
-> 见 `docs/RENDER-ANALYSIS.md` §3.2/§3.4/§3.5——本工具不驱动浏览器。
+> 见 `docs/RENDER-ANALYSIS.md` §6/§8/§9——本工具不驱动浏览器。
+> I/J 在 `report.md` 里由通用兜底段输出（A–H 有定制表格）。
 
 ## 素材生成
 
@@ -94,16 +99,34 @@ node tools/runtime-probe/run.mjs \
 node tools/runtime-probe/make-session-cli.mjs --home "$RT/home" \
   --id session-probe-long --events 240000 --pad 700 --cwd 'F:\dsh-rt\probe-workspace'
 
-# 重会话：300 turn、620 次工具调用（消息主导，首屏约 1.7 MB）
+# 重会话：300 turn、620 次工具调用（消息主导）
 node tools/runtime-probe/make-session-cli.mjs --home "$RT/home" \
   --id session-probe-heavy --turns 300 --profile tools --tool-bytes 30000 --seed 42 \
   --cwd 'F:\dsh-rt\probe-workspace'
+
+# 内容 A/B：markdown + 公式 vs 纯文本（同为 300 turn）
+node tools/runtime-probe/make-session-cli.mjs --home "$RT/home" \
+  --id session-probe-md --turns 300 --profile markdown --seed 42
+node tools/runtime-probe/make-session-cli.mjs --home "$RT/home" \
+  --id plain300 --turns 300 --profile plain --seed 42
 ```
 
 `--profile` 三档：`plain`（单行随机文本）、`markdown`（标题/列表/表格/围栏代码/
 公式/CJK）、`tools`（追加 bash 日志、文件读、unified diff 的 `tool/call` +
 `tool/result`）。生成后用真实后端**读回自检**（事件数、turn 数、工具配对），
-失败直接退出 1，不打印路径。
+失败直接退出 1，不打印路径。`--events` 必须是 8 的倍数（每个 turn 固定 8 个事件）。
+
+## 响应腿编码基准
+
+```sh
+node tools/runtime-probe/bench-encode.mjs \
+  --home "$RT/home" --agents "$RT/agents" --port 3300 --session session-probe-long
+```
+
+按 `stream-server` 的真实帧形状（字符串 `streamId`、完整 `SessionWireHeader`）量
+`JSON.stringify` + `deflate(level 1)` + `inflate`，输出 UTF-8 字节。它只覆盖
+「服务端产出之后」的编码段；写队列等待与网络要配合 `stats.render.sends` 与客户端
+`event.timeStamp` 才有完整链路（见 RENDER-ANALYSIS §6）。
 
 ## 关键约束
 
@@ -122,7 +145,7 @@ node tools/runtime-probe/make-session-cli.mjs --home "$RT/home" \
 
 | 来源 | 能给什么 | 不能给什么 |
 |---|---|---|
-| `stats.get` | 补丁状态、fork 计数与逐次耗时、预热/回行计数、`alreadyHot` | 冷折叠耗时、materialize 帧数与耗时、堆用量 |
+| `stats.get` | 补丁状态、fork 计数与逐次耗时、回写计数、`stats.render` | 冷折叠耗时、materialize 帧数与耗时、堆用量 |
 | `stats.patches` | 补丁是否装上 | **是否被真实链路调用** |
 | 外部墙钟 | RPC 端到端 | 纯折叠成本（含序列化/网络） |
 | pinger | 事件循环阻塞的**代理**指标 | 真实峰值（受采样间隔限制） |
@@ -133,7 +156,7 @@ node tools/runtime-probe/make-session-cli.mjs --home "$RT/home" \
 
 - `session/list` 的参数名是 `_request` 而不是 `request`（descriptor 用了定义名）；
   传错会得到 `args fields do not match the descriptor`。
-- `chunkedMaterialize` / `fastInitFor` 只在 install 时读一次配置，
+- `chunkedMaterialize` / `renderTiming` / `memoryBudgetBytes` 只在 install 时读一次配置，
   运行期 `config.set` 改不动 → 用 `DSH_PERF_*` 环境变量在启动时定值。
 - 合成会话的事件类型必须来自 `KNOWN_SESSION_EVENT_TYPES`，`request/header` 不能带
   空的 `tools` / `adapterDefaults`，`tool/call` 必须先在同一个 header 里声明工具

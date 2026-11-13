@@ -36,6 +36,10 @@ if (!existsSync(home)) {
 const sessionsRoot = join(home, 'sessions')
 const turns = arg('turns', undefined)
 const events = Number(arg('events', '240000'))
+if (turns === undefined && (!Number.isInteger(events) || events <= 0 || events % 8 !== 0)) {
+  console.error('--events must be a positive multiple of 8（buildTurnEvents 每 turn 产出 8 个事件）')
+  process.exit(1)
+}
 const pad = Number(arg('pad', '160'))
 const profile = arg('profile', turns === undefined ? 'plain' : 'markdown')
 const toolBytes = Number(arg('tool-bytes', '12000'))

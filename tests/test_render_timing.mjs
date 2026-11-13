@@ -252,7 +252,11 @@ const drain = async (iterator) => {
   const jumps = stats.render.pages.filter((entry) => entry.kind === 'jump')
   check('jump burst: consecutive older pages collapse into one jump', jumps.length === 1, String(jumps.length))
   check('jump burst: aggregates page count', jumps[0]?.pages === 3, String(jumps[0]?.pages))
-  check('jump burst: aggregates records', jumps[0]?.records === 6, String(jumps[0]?.records))
+  check('jump burst: aggregates records', jumps[0]?.recordsTotal === 6, String(jumps[0]?.recordsTotal))
+  check('jump burst: aggregates bytes', typeof jumps[0]?.bytesTotal === 'number' && jumps[0].bytesTotal > 0, String(jumps[0]?.bytesTotal))
+  // jump 是跨页合计，不能复用单页的 records/bytes 名字，否则消费端会把两个量混算。
+  check('jump burst: does not reuse single-page field names',
+    jumps[0]?.records === undefined && jumps[0]?.bytes === undefined, Object.keys(jumps[0] ?? {}).join(','))
   check('jump burst: increments the counter', stats.render.jumps === 1, String(stats.render.jumps))
   check('jump burst: keeps the session id', jumps[0]?.sessionId === 's-2', String(jumps[0]?.sessionId))
   for (const dispose of disposers.splice(0).reverse()) dispose()

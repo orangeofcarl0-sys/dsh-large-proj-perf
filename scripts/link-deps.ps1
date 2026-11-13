@@ -48,7 +48,7 @@ if (-not (Test-Path $DshInternal)) {
 # dsh 版本提示（插件与 dsh 内部结构高度耦合，版本漂移时特征校验会跳过补丁）。
 #
 # 这里只打印实际版本，不做「是否验证过」的判定：验证过的版本列表以
-# lib/runtime.js 的 KNOWN_runtime_VERSIONS 为唯一来源，判定权交给
+# lib/runtime.js 的 KNOWN_DSH_VERSIONS 为唯一来源，判定权交给
 # `node tests/verify_compat.mjs`（它会拿真实安装源码逐条断言并实算版本门禁）。
 # 不在本脚本里复制/解析该列表——任何副本都会与测试和运行时探针脱节。
 try {

@@ -55,12 +55,14 @@ try {
   const records = page.value?.records ?? []
 
   // 与 stream-server 实际发送的形状一致：{ type:'item', streamId, value }。
+  // streamId 是字符串（stream-protocol.ts），header 是完整的 SessionWireHeader
+  // （version/id/createdAt/isSeeded 都是必填），否则字节数会偏小。
   const message = {
     type: 'item',
-    streamId: 1,
+    streamId: 'bench-1',
     value: {
       type: 'snapshot',
-      header: { id: sessionId },
+      header: { version: 4, id: sessionId, createdAt: Date.now(), isSeeded: false },
       cursor: page.value?.cursor ?? 0,
       records,
       hasMore: page.value?.hasMore === true,
@@ -69,6 +71,7 @@ try {
   }
 
   const text = JSON.stringify(message)
+  const frameBytes = Buffer.byteLength(text, 'utf8')
   const stringifyMs = round(time(() => JSON.stringify(message), 5))
   const deflateMs = round(time(() => deflateSync(text, { level: 1 }), 3))
   const compressed = deflateSync(text, { level: 1 })
@@ -77,11 +80,11 @@ try {
   console.log(JSON.stringify({
     sessionId,
     records: records.length,
-    recordsBytes: JSON.stringify(records).length,
-    projectionBytes: JSON.stringify(projections.value ?? null).length,
-    frameBytes: text.length,
+    recordsBytes: Buffer.byteLength(JSON.stringify(records), 'utf8'),
+    projectionBytes: Buffer.byteLength(JSON.stringify(projections.value ?? null), 'utf8'),
+    frameBytes,
     compressedBytes: compressed.length,
-    ratio: round(text.length / Math.max(1, compressed.length)),
+    ratio: round(frameBytes / Math.max(1, compressed.length)),
     stringifyMs,
     deflateMs,
     inflateMs,

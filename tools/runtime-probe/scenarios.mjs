@@ -1,10 +1,11 @@
-// 六个运行时场景。每个场景独立起停实例（除同进程 A/B），结果写 report。
+// 十个运行时场景（A–J）。每个场景独立起停实例（除同进程 A/B），结果写 report。
 //
 // 设计原则：
 //   - 所有测量都同时记录「插件计数器」与「外部墙钟/RSS」，因为插件对 materialize
 //     与冷折叠完全没有埋点；
 //   - 每次切换配置先 stats.reset，避免上一轮数据污染；
-//   - warmup 关闭必须重启进程（已预热 cell 存在 WeakMap 里，撤不掉）。
+//   - install 时读一次的配置（chunkedMaterialize / renderTiming 等）必须靠
+//     `DSH_PERF_*` 环境变量在启动时定值。
 
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -100,9 +101,9 @@ export async function scenarioA(opts) {
   })
 }
 
-// ---------- 场景 B：冷读基线（warmup 关闭，重启后第一次读出） ----------
+// ---------- 场景 B：冷读基线（重启后第一次读出） ----------
 export async function scenarioB(opts) {
-  return withInstance({ ...opts, configPatch: { warmupEnabled: false, minEvents: 2000000 } }, async ({ server, client }) => {
+  return withInstance(opts, async ({ server, client }) => {
     await client.statsReset()
     const rss = startRssSampler(server.pid, 200)
     const pinger = startPinger(client, { intervalMs: 50 })
@@ -125,23 +126,22 @@ export async function scenarioB(opts) {
       rssBeforeMB: before,
       rss: mem,
       pinger: ping,
-      warmed: stats.value.warmed,
-      skipped: stats.value.skipped,
-      warmRecent: stats.value.warmRecent,
       patches: stats.value.patches,
     }
   })
 }
 
-// ---------- 场景 C：预热收益（warmup 开，resume 触发 session/created） ----------
+// ---------- 场景 C：resume 冷读 + 投影热读 ----------
+//
+// v1.10.0 删除 warmup 后，C 的旧语义（等 warmed 计数）已无对象。保留这个字母，
+// 改测仍然存在的东西：rename 触发 resolveAgent → 全量读日志 → prepare → announce
+// 的墙钟（一次 resume 冷读），以及紧随其后的 projections 热读。
 export async function scenarioC(opts) {
-  return withInstance({ ...opts, configPatch: { warmupEnabled: true, minEvents: 20000, warmOnCreated: true } }, async ({ server, client }) => {
+  return withInstance(opts, async ({ server, client }) => {
     await client.statsReset()
     const pinger = startPinger(client, { intervalMs: 50 })
     const rss = startRssSampler(server.pid, 200)
 
-    // resume：rename 会在服务端 resolveAgent → 读全量日志 → prepare → announce，
-    // announce 之后才发出 session/created，插件的预热监听在这里被唤醒。
     const t0 = performance.now()
     let renameOk = true
     let renameErr = null
@@ -153,28 +153,16 @@ export async function scenarioC(opts) {
     }
     const resumeAndRenameMs = performance.now() - t0
 
-    // 预热是异步的：等它跑完（max 120s），轮询 warmed 计数。
-    const deadline = performance.now() + 120000
-    let stats = await client.stats()
-    while (performance.now() < deadline && stats.value.warmed === 0 && stats.value.aborted === 0) {
-      await new Promise((r) => setTimeout(r, 300))
-      stats = await client.stats()
-    }
-
     const ping = pinger.stop()
     const mem = rss.stop()
 
-    // 预热后读投影：应命中热 cell，不再冷折叠。
+    // resume 后读投影：应命中刚折好的热 cell，不再冷折叠。
     const after = await client.rpc('session', 'projections', { sessionId: LONG })
+    const stats = await client.stats()
     return {
       renameOk,
       renameErr,
       resumeAndRenameMs: +resumeAndRenameMs.toFixed(1),
-      warmed: stats.value.warmed,
-      skipped: stats.value.skipped,
-      aborted: stats.value.aborted,
-      alreadyHot: stats.value.alreadyHot,
-      warmRecent: stats.value.warmRecent,
       projectionsAfterMs: +after.wallMs.toFixed(1),
       projectionKeyCount: Object.keys(after.value?.values ?? {}).length,
       rss: mem,
@@ -214,7 +202,7 @@ export async function scenarioD(opts) {
 
 // ---------- 场景 E：直测补丁点（debug.fork，同进程 A/B） ----------
 export async function scenarioE(opts) {
-  return withInstance({ ...opts, configPatch: { debugApi: true, warmupEnabled: false, minEvents: 2000000 } }, async ({ server, client }) => {
+  return withInstance({ ...opts, configPatch: { debugApi: true } }, async ({ server, client }) => {
     // 先让源会话 live（debug.fork 走 SessionStore.fork，需要 live source）
     let liveOk = true
     let liveErr = null
@@ -264,7 +252,7 @@ export async function scenarioE(opts) {
 // SessionStore.fork（纯内存建 session，不落盘），materialize 由 agent 生命周期的
 // persistence.create 触发，只有走 agents.create 的路径才会写文件。
 async function materializeRun({ enabled }, opts) {
-  return withInstance({ ...opts, extraEnv: { DSH_PERF_CHUNKED_MATERIALIZE: enabled ? 'true' : 'false', DSH_PERF_WARMUP_ENABLED: 'false', DSH_PERF_MIN_EVENTS: '2000000' } }, async ({ server, client }) => {
+  return withInstance({ ...opts, extraEnv: { DSH_PERF_CHUNKED_MATERIALIZE: enabled ? 'true' : 'false', DSH_PERF_MIN_EVENTS: '2000000' } }, async ({ server, client }) => {
     const pinger = startPinger(client, { intervalMs: 50 })
     const t0 = performance.now()
     const fork = await client.rpc('session', 'fork', { sessionId: LONG })
@@ -322,7 +310,7 @@ export async function scenarioG(opts) {
   // --- 回合 1：冷读（回写开启）---
   const round1 = await withInstance({
     ...opts,
-    extraEnv: { DSH_PERF_COLD_WRITE_BACK: 'true', DSH_PERF_WARMUP_ENABLED: 'false', DSH_PERF_MIN_EVENTS: '20000' },
+    extraEnv: { DSH_PERF_COLD_WRITE_BACK: 'true', DSH_PERF_MIN_EVENTS: '20000' },
     beforeStart: async () => { await clearProjectionCache(opts.home) },
   }, async ({ client }) => {
     const first = await coldRead(client)
@@ -350,7 +338,7 @@ export async function scenarioG(opts) {
   const round2 = await withInstance({
     ...opts,
     port: opts.port + 1,
-    extraEnv: { DSH_PERF_COLD_WRITE_BACK: 'true', DSH_PERF_WARMUP_ENABLED: 'false', DSH_PERF_MIN_EVENTS: '20000' },
+    extraEnv: { DSH_PERF_COLD_WRITE_BACK: 'true', DSH_PERF_MIN_EVENTS: '20000' },
   }, async ({ client }) => {
     const second = await coldRead(client)
     const stats = await client.stats()
@@ -367,7 +355,7 @@ export async function scenarioG(opts) {
   const round3 = await withInstance({
     ...opts,
     port: opts.port + 2,
-    extraEnv: { DSH_PERF_COLD_WRITE_BACK: 'false', DSH_PERF_WARMUP_ENABLED: 'false', DSH_PERF_MIN_EVENTS: '20000' },
+    extraEnv: { DSH_PERF_COLD_WRITE_BACK: 'false', DSH_PERF_MIN_EVENTS: '20000' },
     beforeStart: async () => { await clearProjectionCache(opts.home) },
   }, async ({ client }) => {
     const first = await coldRead(client)
@@ -382,7 +370,7 @@ export async function scenarioG(opts) {
   const round4 = await withInstance({
     ...opts,
     port: opts.port + 3,
-    extraEnv: { DSH_PERF_COLD_WRITE_BACK: 'false', DSH_PERF_WARMUP_ENABLED: 'false', DSH_PERF_MIN_EVENTS: '20000' },
+    extraEnv: { DSH_PERF_COLD_WRITE_BACK: 'false', DSH_PERF_MIN_EVENTS: '20000' },
   }, async ({ client }) => {
     const second = await coldRead(client)
     return { warmReadMs: second.ms }
@@ -441,8 +429,8 @@ async function renderPageRun(options) {
     const first = await client.rpc('session', 'events', { address, ...RENDER_PAGE })
     const coldMs = performance.now() - coldStart
     const firstRecords = first.value?.records ?? []
-    const firstBytes = JSON.stringify(first.value ?? null).length
-    const recordsBytes = JSON.stringify(firstRecords).length
+    const firstBytes = Buffer.byteLength(JSON.stringify(first.value ?? null), 'utf8')
+    const recordsBytes = Buffer.byteLength(JSON.stringify(firstRecords), 'utf8')
 
     const warmStart = performance.now()
     const second = await client.rpc('session', 'events', { address, ...RENDER_PAGE })
@@ -452,7 +440,7 @@ async function renderPageRun(options) {
     const projStart = performance.now()
     const projections = await client.rpc('session', 'projections', { sessionId: LONG })
     const projectionMs = performance.now() - projStart
-    const projectionBytes = JSON.stringify(projections.value?.values ?? null).length
+    const projectionBytes = Buffer.byteLength(JSON.stringify(projections.value?.values ?? null), 'utf8')
 
     const stats = await client.stats()
     return {
@@ -502,8 +490,8 @@ export async function scenarioI(opts) {
     const page = await client.rpc('session', 'events', { address, ...RENDER_PAGE })
     const coldMs = performance.now() - startedAt
     const records = page.value?.records ?? []
-    const bytes = JSON.stringify(page.value ?? null).length
-    const recordsBytes = JSON.stringify(records).length
+    const bytes = Buffer.byteLength(JSON.stringify(page.value ?? null), 'utf8')
+    const recordsBytes = Buffer.byteLength(JSON.stringify(records), 'utf8')
     const messages = countMessages(records)
 
     const warmStart = performance.now()
@@ -513,7 +501,7 @@ export async function scenarioI(opts) {
     const projStart = performance.now()
     const projections = await client.rpc('session', 'projections', { sessionId: HEAVY })
     const projectionMs = performance.now() - projStart
-    const projectionBytes = JSON.stringify(projections.value?.values ?? null).length
+    const projectionBytes = Buffer.byteLength(JSON.stringify(projections.value?.values ?? null), 'utf8')
 
     // 近似 control 基线：所有会话的投影值之和（control 一帧里装的就是这些）。
     let baselineBytes = 0
@@ -523,7 +511,7 @@ export async function scenarioI(opts) {
       const ids = (listed.value?.items ?? []).map((item) => item.sessionId).filter((id) => typeof id === 'string')
       for (const id of ids.slice(0, 12)) {
         const one = await client.rpc('session', 'projections', { sessionId: id })
-        baselineBytes += JSON.stringify(one.value?.values ?? null).length
+        baselineBytes += Buffer.byteLength(JSON.stringify(one.value?.values ?? null), 'utf8')
         baselineSessions += 1
       }
     } catch (error) {

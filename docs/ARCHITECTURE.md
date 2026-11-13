@@ -17,21 +17,21 @@
 | 侧 | 环节 | 症状 |
 |---|---|---|
 | **写入** | `Session` 构造时逐事件 `snapshotJsonValue` + `deepFreeze`；`encodeMaterialization` 把整个 seed 拼成一个字符串 | fork 与落盘都要复制/序列化全部事件 |
-| **读取** | 打开时把 18 MB zstd 变成内存事件数组；再对 29 个投影单元逐个 `def.apply` 折叠全部事件 | 首次打开 21 秒（实测，见 MEASUREMENTS §1） |
-| **驻留** | 三处事件缓存都按「会话条数」限容，不按字节 | 6 个 18 MB 会话 → 1.2 GB RSS（实测，见 MEASUREMENTS §2） |
-| **渲染** | 浏览器拿到窗口后**全量挂载**（上游没有虚拟滚动），且投影快照里装着全部 turn | 打开 7.4 秒到首行；批量翻页可达秒级阻塞（见 RENDER-ANALYSIS） |
+| **读取** | 打开时把整份 zstd 日志变成内存事件数组；再对 29 个投影单元逐个 `def.apply` 折叠全部事件 | 首次打开慢，量级见 MEASUREMENTS §1 |
+| **驻留** | 三处事件缓存都按「会话条数」限容，不按字节 | 稳态 RSS 随会话数线性增长，见 MEASUREMENTS §2 |
+| **渲染** | 浏览器拿到窗口后**全量挂载**（上游没有虚拟滚动），且投影快照里装着全部 turn | 见 RENDER-ANALYSIS §5–§8 |
 
-对应的能力：
+对应的能力（数字统一由 MEASUREMENTS / RENDER-ANALYSIS 持有，本文不重复）：
 
-| 侧 | 能力 | 实测效果 |
+| 侧 | 能力 | 效果 |
 |---|---|---|
-| 读取 | `fastTurnOutline` | 冷读 21.2 s → 3.0 s |
-| 驻留 | `memoryBudget` | 稳态 RSS 1324 MB → 690 MB |
-| 渲染 | `clientContainment`（浏览器侧） | 批量翻页阻塞 2836 → 1489 ms |
+| 读取 | `fastTurnOutline` | 冷读从十秒级降到秒级（MEASUREMENTS §1.3） |
+| 驻留 | `memoryBudget` | 稳态 RSS 下降约一半（MEASUREMENTS §2.4） |
+| 渲染 | `clientContainment`（浏览器侧） | 批量翻页阻塞约减半（RENDER-ANALYSIS §7） |
 | 渲染 | `renderTiming`（诊断） | 首行/稳定/长任务 + 服务端每页耗时与字节 |
-| 写入 | 零拷贝 fork | 直测 -16% ~ -21%（但 UI 不走这条路） |
-| 写入 | `chunkedMaterialize` | 帧数 2 → 6，字节不变 |
-| 读取 | `coldWriteBack` | 无耗时收益，默认关 |
+| 写入 | 零拷贝 fork | 直测有收益，但 UI 不走这条路（MEASUREMENTS §1.4） |
+| 写入 | `chunkedMaterialize` | 帧数增加，字节不变（MEASUREMENTS §1.4） |
+| 读取 | `coldWriteBack` | 无耗时收益，默认关（MEASUREMENTS A.2） |
 
 ## 2. 装配契约：`deps` 与 `runtime`
 
@@ -111,7 +111,7 @@ v1.9.0 及之前的一个真实 bug：**打开 `backfillOnBoot` 不会补跑扫�
 **已知局限**：dsh 0.2.2 的服务端 `session/fork` RPC 不再调用这个方法，改为自建
 `buildForkSeed` 后走 `agents.create({seed})`。所以本补丁在 Web UI 的分支会话链路上
 **从未被调用**（实测 `stats.forks = 0`）。直测（`debugApi` 暴露的 `debug.fork`）
-仍有 -16% ~ -21% 的收益。
+仍有收益，量级见 MEASUREMENTS §1.4。
 
 ### 3.2 分片 materialize
 
@@ -135,8 +135,8 @@ v1.9.0 及之前的一个真实 bug：**打开 `backfillOnBoot` 不会补跑扫�
 **探测失败**：方法不存在 → `inactive`；签名不匹配 → 打 `signature mismatch` 日志 +
 `inactive`。
 
-**实测边界**：只改变帧数（2 → 6），不改变字节总数与耗时。它解决的是内存峰值与
-`RangeError`，不是吞吐。
+**实测边界**：只改变帧数，不改变字节总数与耗时（MEASUREMENTS §1.4）。它解决的是
+内存峰值与 `RangeError`，不是吞吐。
 
 ### 3.3 turnOutline 折叠加速
 
@@ -144,8 +144,8 @@ v1.9.0 及之前的一个真实 bug：**打开 `backfillOnBoot` 不会补跑扫�
 
 **为什么能省**：上游 `apply` 每次 `turn/start` 执行 `turns: [...state.turns, next]`、
 每次 `user/message` / `turn/end` 执行 `turns: [...state.turns.slice(0, -1), fixed]`
-——整数组复制，N 个 turn 是 O(N²)。实测 2 万 turn 时比线性实现慢 701 倍，占整个
-冷读的 76%。
+——整数组复制，N 个 turn 是 O(N²)。它在冷读总耗时中占绝对多数，量级见
+MEASUREMENTS §1.2–§1.3。
 
 **语义等价的硬要求**：这是替换投影语义，任何一个字段与上游不同都会让同一会话在
 不同路径下渲染出不同 outline，并把差异写进缓存行。三层保证：
@@ -172,8 +172,8 @@ v1.9.0 及之前的一个真实 bug：**打开 `backfillOnBoot` 不会补跑扫�
 | `sessionQuery._observations.store` | 包装实例方法，每次插入后按估算字节总量淘汰 |
 | `persistence` 原型的 `decodeStoredLog` | 包装原型方法，decompress 完成后裁剪 `coldLogMemo` |
 
-**为什么需要**：上游的淘汰判据只有 `cache.size <= cacheCapacity`——只看条数。实测
-6 个 18 MB 会话 → 1.2 GB RSS。
+**为什么需要**：上游的淘汰判据只有 `cache.size <= cacheCapacity`——只看条数，
+5 个大会话与 5 个小会话在它眼里一样。稳态 RSS 的实测曲线见 MEASUREMENTS §2.3。
 
 **估算**：`events.length × 400 B`（实测 365 B/事件，留余量）。目的不是精确，是区分
 「5 个大会话」与「5 个小会话」。
@@ -187,7 +187,9 @@ v1.9.0 及之前的一个真实 bug：**打开 `backfillOnBoot` 不会补跑扫�
 **探测失败**：`sessionQuery._observations.cache` 不可达（上游改了私有字段名）→
 `inactive`，不做任何猜测。
 
-### 3.5 渲染链路：诊断、窗口预算、客户端 containment
+## 4. 非补丁：渲染链路、运行时检查与默认关的能力
+
+### 4.1 渲染链路：诊断、窗口预算、客户端 containment
 
 浏览器侧的完整分析见 [RENDER-ANALYSIS.md](RENDER-ANALYSIS.md)。实现分三块：
 
@@ -206,8 +208,9 @@ v1.9.0 及之前的一个真实 bug：**打开 `backfillOnBoot` 不会补跑扫�
 dsh-session 反推，三条候选），包装 `WebSocket.prototype.send` 的回调，只记录
 ≥64 KiB 的帧，写进 `stats.render.sends = [{t, sentAt, bytes}]`。它把「服务端产出
 之后」再拆成写队列等待（`server.t → send 调用`）与 deflate+写入
-（`send → 回调`）；配合客户端 `event.timeStamp` 得到网络+inflate。实测冷读后
-deflate 从 207 ms 涨到 1 493 ms，写队列在热读时精确等于 control 帧的写耗时。
+（`send → 回调`）；配合客户端 `event.timeStamp` 得到网络+inflate。冷读后 deflate
+会显著变慢，写队列在热读时精确等于 control 帧的写耗时；数字见
+RENDER-ANALYSIS §6。
 
 > **为什么能包装内部对象**：`sessionController` 是 cordis 服务，其构造函数把
 > `historyController` / `webController` 放在实例上（`dsh-api-session-controller`
@@ -220,8 +223,8 @@ deflate 从 207 ms 涨到 1 493 ms，写队列在热读时精确等于 control �
 只改请求参数，不改分页语义；`hasMore` 仍由上游按实际切页位置计算。
 
 > 实测教训：客户端请求 `maxMessages: 500`，但 `paginate` 在「≥50 条消息且跨过
-> ≥2 个 turn」时就切页，所以短 turn 会话的真实首屏是 ~50 条。**只压
-> maxMessages 对这种会话完全无效**（150 与 500 产出同样的 231 个事件）。
+> ≥2 个 turn」时就切页，所以短 turn 会话的真实首屏远小于 500 条。**只压
+> maxMessages 对这种会话完全无效**（见 RENDER-ANALYSIS §4 事实 2）。
 
 **`lib/client.js`（浏览器端，受 config 控制）**
 dsh 的客户端模块表按「经典脚本 + 惰性工厂」加载：`package.json` 声明
@@ -246,8 +249,8 @@ dsh 的客户端模块表按「经典脚本 + 惰性工厂」加载：`package.j
   - **WS 帧时间戳**：从 `remote.streams.socket`（TS private，运行时是普通属性）
     挂一个 `message` 监听器，记录 `event.timeStamp`（真正的到达时刻）、帧字节数与
     `streamId → endpoint` 归属。**归因必须用 `timeStamp`**：监听器自身可能被
-    应用解析大帧后的微任务检查点推迟；实测长会话里 `timeStamp` 比监听器执行早
-    224 ms，用监听器时间会把服务端成本算到浏览器头上；
+    应用解析大帧后的微任务检查点推迟，用监听器时间会把服务端成本算到浏览器头上
+    （差值量级见 RENDER-ANALYSIS §3）；
   - 窗口：首屏（导航 → 首行 → 首帧 → 稳定）、回合跳转
     （`data-chat-history` 进入 loading 到行数稳定）、滚动跳变
     （逐帧 `scrollTop` + 锚点行漂移 + 输入意图）；
@@ -262,15 +265,13 @@ dsh 的客户端模块表按「经典脚本 + 惰性工厂」加载：`package.j
 服务**启动失败**（不是降级）。`tests/verify_compat.mjs` 有断言同时检查声明、
 文件存在与包名 id，缺一不可。
 
-## 4. 非补丁：运行时检查与默认关的能力
-
-### 4.1 heap 上限告警（不是补丁）
+### 4.2 heap 上限告警（不是补丁）
 
 `lib/index.js` 在 `apply` 时读一次 `getHeapStatistics().heap_size_limit`，低于
 `heapWarnBytes`（默认 6 GiB）打告警。它不在 `stats.patches` 里——不是补丁，没有
 install / dispose 生命周期。
 
-### 4.2 冷读回写（默认关）
+### 4.3 冷读回写（默认关）
 
 包装 `sessionProjectionCache.hydratePrepared`，冷读后把已折好的状态写成缓存行。
 
@@ -278,7 +279,7 @@ install / dispose 生命周期。
 保留原因只有一条：让 dsh 自己的列表读（`cachedSnapshot`，零 I/O）看到更新数据。
 默认关，因为每次要写约 10 MB。
 
-### 4.3 冷会话补行（默认关）
+### 4.4 冷会话补行（默认关）
 
 `lib/backfill.js`：启动 15 秒后扫描磁盘上的大会话，把缺失或陈旧的投影缓存行补上。
 解码按 zstd frame 逐帧异步 + 帧间让出，折叠按 `chunkSize` 让出。默认关——它仍是

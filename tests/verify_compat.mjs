@@ -435,10 +435,24 @@ check('render attribution: the server stringifies and serializes writes per item
 check('render attribution: the mux send accepts a completion callback',
   streamServerSrc.includes('socket.send(text') && streamServerSrc.includes('compress'),
   'plugin wraps ws send to split queue wait from deflate+write')
+const wsTimingSrc = readFileSync(new URL('../lib/ws-timing.js', import.meta.url), 'utf8')
+const dshRootSrc = readFileSync(new URL('../lib/dsh-root.js', import.meta.url), 'utf8')
 const renderTimingSrc = readFileSync(new URL('../lib/render-timing.js', import.meta.url), 'utf8')
 check('render attribution: plugin records ws send queue and completion',
-  renderTimingSrc.includes('installSendTiming') && renderTimingSrc.includes('sentAt')
-    && renderTimingSrc.includes("'@deepseek-ai/dsh/package.json'"))
+  wsTimingSrc.includes('installSendTiming') && wsTimingSrc.includes('sentAt')
+    && dshRootSrc.includes("'@deepseek-ai/dsh/package.json'"))
+check('render attribution: ws send timing only restores its own wrapper',
+  wsTimingSrc.includes('if (proto.send === send)'))
+check('render attribution: send bytes are UTF-8 bytes',
+  wsTimingSrc.includes("Buffer.byteLength(data, 'utf8')"))
+// ws 计时不依赖 sessionController：它必须在 controller 门禁之前安装，并有独立状态。
+check('render attribution: ws send timing is installed before the controller gate',
+  renderTimingSrc.indexOf('installSendTiming(deps)') < renderTimingSrc.indexOf("safeGet(ctx, 'sessionController')"))
+check('render attribution: ws send timing has its own patch status',
+  renderTimingSrc.includes("setPatchStatus('renderTimingSend'"))
+const scenariosSrc = readFileSync(new URL('../tools/runtime-probe/scenarios.mjs', import.meta.url), 'utf8')
+check('tools: scenarios no longer write removed warmup config',
+  !scenariosSrc.includes('warmupEnabled') && !scenariosSrc.includes('DSH_PERF_WARMUP_ENABLED'))
 
 
 

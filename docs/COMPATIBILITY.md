@@ -105,9 +105,10 @@ meta: { cwd, isSeeded: true }
 - `lib/patches/zero-copy-fork.js` 原本无条件写 `parentSession`，导致同一版本内
   「走零拷贝」与「回退原生」产出的 header 不同。现按原生源码探测
   `nativeSetsParentSession = String(originalFork).includes('parentSession: liveSource.id')`。
-- `lib/warmup.js` 原本用 `header.parentSession !== undefined` 判断 fork 子会话以触发
-  缓存回填；该判断在 0.2.2 下恒假，回填会静默失效。现改为
-  `parentSession !== undefined || inheritedEventCount > 0`。
+- `lib/warmup.js`（**已于 v1.10.0 删除**）当年用 `header.parentSession !== undefined`
+  判断 fork 子会话以触发缓存回填；该判断在 0.2.2 下恒假，回填会静默失效。当时的修法
+  是 `parentSession !== undefined || inheritedEventCount > 0`。warmup 整体移除后，
+  这条适配只作为历史记录保留。
 
 ### 3. 投影注册与读路径（`dsh-session-projection`）
 

@@ -113,7 +113,7 @@ node --max-old-space-size=8192 <dsh 入口> web
 |---|---|---|---|
 | `fastTurnOutline` | `true` | — | `turnOutline` 的 O(n²) → O(n) |
 | `memoryBudgetBytes` | `536870912` | 字节 | 事件缓存总预算（512 MiB）；`0` 关闭 |
-| `clientContainment` | `true` | — | 长转录离屏行 `content-visibility`（批量翻页阻塞 -47%） |
+| `clientContainment` | `true` | — | 长转录离屏行 `content-visibility`（批量翻页阻塞约 −47%） |
 | `heapWarnBytes` | `6442450944` | 字节 | heap 上限告警阈值（6 GiB） |
 | `zeroCopyFork` | `true` | — | 零拷贝 fork |
 | `slowForkWarnMs` | `100` | ms | fork 耗时超过此值打告警 |
@@ -134,8 +134,9 @@ node --max-old-space-size=8192 <dsh 入口> web
 | `debugApi` | `false` | — | 暴露 `debug.fork` 调试端点（仅用于测量） |
 
 **哪些键运行期改得动**：`fastTurnOutline` / `chunkedMaterialize` / `zeroCopyFork` /
-`maxInitialMessages` / `maxPageBytes` 只在安装时读一次，改了要重启（或用启动期
-环境变量，见下）；`clientContainment` 由浏览器在启动时取一次。其余键在下次使用时重读。
+`maxInitialMessages` / `maxPageBytes` / `renderTiming` / `memoryBudgetBytes` /
+`heapWarnBytes` 只在**安装时**读一次，改了要重启（或用启动期环境变量，见下）；
+`clientContainment` 由浏览器在启动时取一次。其余键在下次使用时重读。
 
 启动期还可用环境变量覆盖任意配置键（仅用于离线测量）：键名是大写蛇形加
 `DSH_PERF_` 前缀，例如 `DSH_PERF_CHUNKED_MATERIALIZE=false`。
@@ -174,24 +175,28 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
   "dshVersion": "0.2.2-rc.1",
   "patches": { "zeroCopyFork": "active", "fastTurnOutline": "active", ... },
   "forks": 0, "zeroCopy": 0, "fallbacks": 0, "forkRecent": [],
-  "memoryBudget": { "budgetBytes": 536870912, "cachedEntries": 0, "estimatedBytes": 0 },
+  "memoryBudget": { "budgetBytes": 536870912, "cachedEntries": 0, "estimatedBytes": 0 }, // 关闭时恒为 null
   "memoryBudgetTrimmed": 0, "memoryBudgetFreedBytes": 0, "memoryBudgetOverBudget": 0,
   "coldWriteBacks": 0, "backfilled": 0, "backfillSkipped": 0,
   "render": {
     "snapshotCount": 0, "snapshotMs": 0, "snapshotMaxMs": 0, "lastUnits": 0,
-    "pages": [], "clients": [], "reports": 0, "dropped": 0
+    "pages": [], "sends": [], "jumps": 0,
+    "clients": [], "reports": 0, "dropped": 0
   }
 }
 ```
 
-`render` 只在 `renderTiming=true` 时有值：`pages` 是服务端每页的
-`{kind, ms, startedAt, records, bytes}`，`clients` 是浏览器回传的
+`memoryBudget` 在预算关闭/不适用时恒为 `null`——字段始终存在，消费端不必判断键是否
+存在。`render` 只在 `renderTiming=true` 时有值：`pages` 是服务端每页的
+`{kind, ms, startedAt, records, bytes}`（jump 条目用 `recordsTotal` / `bytesTotal`，
+表示跨页合计）；`sends` 是 `ws.send` 的 `{t, sentAt, bytes}`；`clients` 是浏览器回传的
 `{kind, rows, firstRowMs, firstFrameMs, settleMs, longTasks, blockingMs, maxTaskMs,
 heartbeatMaxLagMs, streams, timeline}`；`jumps` 是服务端识别出的回合跳转次数
 （连续分页聚合）。读法与实测见 [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)。
 
 诊断模式还会暴露 `window.__dshPerf`：`state()` 看流表、WS 帧与最近样本，
-`jumpToTurn(n)` / `scrollTest({rounds})` / `benchMarkdown({text})` 驱动固定动作。
+`jumpToTurn(n)` / `scrollTest({rounds})` / `benchMarkdown({text, iterations})`
+驱动固定动作，`stop()` 停采集并还原 `$stream` / `socket.send`（`pagehide` 也会调用）。
 
 判断某能力是否真的在起作用，看命中计数而不是 `patches`：
 
@@ -244,13 +249,15 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
   dsh 上插件能力已基本为零（v1.10.0 移除三项依赖旧结构的能力后，0.1.x 只剩零拷贝
   fork 与分片 materialize），因此直接由门禁拒绝，而不是让用户装上一个近乎空转的
   插件。0.3.x 上会被同样拒绝，届时需要新版本插件。
-- **打开一个会话的字节大头不是消息，是投影**：实测一次打开 74 KB 消息 +
-  **6.76 MB 投影**（`turnOutline` 装着全部 turn）。这不是插件能削减的部分，
-  诊断数据与上游建议见 [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)。
+- **打开一个会话的字节大头取决于会话类型**：长会话（30 000 turn）是投影主导——
+  实测 74 KB 消息 + **6.76 MB 投影**（`turnOutline` 装着全部 turn）；重会话
+  （300 turn / 620 次工具调用）反过来，**1.73 MB 消息 + 68 KB 投影**。两种都不是
+  插件能削减的部分，诊断数据与上游建议见
+  [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md) §5。
 - **浏览器侧没有虚拟滚动**（上游 `ChatFlow` 直接 `entries.map()`）。插件只能用
   `content-visibility` 减轻离屏行的布局代价，不能减少挂载数量；向上翻页会持续
-  累积 DOM 与堆（实测约 73 KB/行）。**回合跳转是最极端的路径**：一次跳到早期
-  turn 会挂载上千行（实测 +1 375 行、主线程阻塞 1.7 秒）。
+  累积 DOM 与堆（实测 600 行区间约 73 KiB/行）。**回合跳转是最极端的路径**：一次
+  跳到早期 turn 会挂载上千行（实测 +1 375 行、主线程阻塞 1.7 秒）。
 - **`retired` 补丁状态当前无使用者**：v1.10.0 移除了唯一会设置它的能力。保留该状态
   是因为它是「上游吸收能力后补丁主动让位」的唯一表达。
 
@@ -260,7 +267,7 @@ dsh 内部结构已变，对应补丁已自动跳过（功能回退到官方实�
 # 前置：把全局 dsh 的嵌套依赖 junction 到仓库（仓库本身不含 node_modules）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\link-deps.ps1
 
-# 全套 11 个套件（运行器会打印实测断言总数，当前 278）
+# 全套 13 个套件（断言总数以运行器末行输出为准，不要手写）
 npm test
 ```
 

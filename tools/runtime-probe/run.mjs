@@ -35,7 +35,10 @@ const report = { startedAt: new Date().toISOString(), home, profile, port, scena
 
 for (const name of names) {
   const fn = SCENARIOS[name]
-  if (fn === undefined) { console.error(`unknown scenario ${name}`); continue }
+  if (fn === undefined) {
+    console.error(`unknown scenario ${name} (known: ${Object.keys(SCENARIOS).join(', ')})`)
+    process.exit(1)
+  }
   process.stdout.write(`\n=== scenario ${name} ===\n`)
   const t0 = Date.now()
   try {
@@ -86,26 +89,22 @@ function renderMarkdown(r) {
   }
   const b = r.scenarios.B
   if (b?.ok === true) {
-    lines.push('## B 冷读基线（warmup 关闭）', '', row(['指标', '值']), row(['---', '---']))
+    lines.push('## B 冷读基线', '', row(['指标', '值']), row(['---', '---']))
     lines.push(row(['session/events', `${b.result.eventsMs} ms`]))
     lines.push(row(['session/projections', `${b.result.projectionsMs} ms`]))
     lines.push(row(['投影 key 数', String(b.result.projectionKeyCount)]))
     lines.push(row(['pinger P50/P95/P99/max', `${b.result.pinger.p50}/${b.result.pinger.p95}/${b.result.pinger.p99}/${b.result.pinger.max} ms`]))
     lines.push(row(['pinger stalls', String(b.result.pinger.stalls)]))
     lines.push(row(['RSS 峰值 / 增量', `${b.result.rss.maxMB} / ${b.result.rss.deltaMB} MB`]))
-    lines.push(row(['warmed / skipped', `${b.result.warmed} / ${b.result.skipped}`]))
     lines.push('')
   }
   const c = r.scenarios.C
   if (c?.ok === true) {
-    lines.push('## C 预热（warmup 开）', '', row(['指标', '值']), row(['---', '---']))
+    lines.push('## C resume 冷读 + 投影热读', '', row(['指标', '值']), row(['---', '---']))
     lines.push(row(['rename(resume) 墙钟', `${c.result.resumeAndRenameMs} ms`]))
     lines.push(row(['rename 结果', c.result.renameOk ? 'ok' : `FAIL: ${c.result.renameErr}`]))
-    lines.push(row(['warmed', String(c.result.warmed)]))
-    lines.push(row(['alreadyHot（上游已建满 cell）', String(c.result.alreadyHot)]))
-    lines.push(row(['skipped', String(c.result.skipped)]))
-    lines.push(row(['warmRecent', '```' + JSON.stringify(c.result.warmRecent) + '```']))
-    lines.push(row(['预热后 projections', `${c.result.projectionsAfterMs} ms`]))
+    lines.push(row(['resume 后 projections', `${c.result.projectionsAfterMs} ms`]))
+    lines.push(row(['投影 key 数', String(c.result.projectionKeyCount)]))
     lines.push(row(['pinger P50/P95/P99/max', `${c.result.pinger.p50}/${c.result.pinger.p95}/${c.result.pinger.p99}/${c.result.pinger.max} ms`]))
     lines.push(row(['RSS 峰值 / 增量', `${c.result.rss.maxMB} / ${c.result.rss.deltaMB} MB`]))
     lines.push('')
@@ -168,5 +167,12 @@ function renderMarkdown(r) {
       lines.push('```', JSON.stringify(rows, null, 2), '```', '')
     }
   }
+  // 兜底：A–H 之外的场景（I/J 以及以后新增的）不能静默消失。
+  const handled = new Set(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'])
+  for (const [name, value] of Object.entries(r.scenarios)) {
+    if (handled.has(name) || value?.ok !== true) continue
+    lines.push(`## ${name}`, '', '```json', JSON.stringify(value.result, null, 2), '```', '')
+  }
+
   return lines.join('\n') + '\n'
 }

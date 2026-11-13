@@ -18,8 +18,10 @@ const here = dirname(fileURLToPath(import.meta.url))
 // 运行顺序：兼容性/契约 → 各点位 → 真实组件 e2e（重负载放最后）
 const ORDER = [
   'verify_compat.mjs',
+  'verify_docs.mjs',
   'test_context.mjs',
   'test_patch_target.mjs',
+  'test_client_bundle.mjs',
   'smoke_fork.mjs',
   'test_cold_writeback.mjs',
   'test_fast_turn_outline.mjs',
@@ -31,6 +33,13 @@ const ORDER = [
 ]
 
 const present = new Set(readdirSync(here).filter((f) => f.endsWith('.mjs')))
+// ORDER 里列了但文件不存在，是配置错误（拼写/误删），必须显式失败；
+// 旧实现会静默跳过，少跑套件也报“全绿”。
+const missing = ORDER.filter((f) => !present.has(f))
+if (missing.length > 0) {
+  console.error(`ORDER 中的测试文件不存在：${missing.join(', ')}`)
+  process.exit(1)
+}
 const suites = ORDER.filter((f) => present.has(f))
 const unknown = [...present].filter((f) => !ORDER.includes(f) && f !== 'run.mjs' && f !== 'zstd_frames.mjs' && !f.startsWith('bench_'))
 if (unknown.length > 0) {
@@ -43,8 +52,13 @@ let assertions = 0
 const results = []
 for (const suite of suites) {
   const started = Date.now()
-  // 用 pipe 而非 inherit，以便同时转发输出并统计断言行
-  const r = spawnSync(process.execPath, [join(here, suite)], { stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8' })
+  // 用 pipe 而非 inherit，以便同时转发输出并统计断言行。
+  // 超时兜底：单个套件卡死不应让整轮 CI 永久挂住。
+  const r = spawnSync(process.execPath, [join(here, suite)], {
+    stdio: ['inherit', 'pipe', 'inherit'],
+    encoding: 'utf8',
+    timeout: 600000,
+  })
   const out = r.stdout ?? ''
   if (out !== '') process.stdout.write(out)
   let suiteAssertions = 0

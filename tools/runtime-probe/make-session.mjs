@@ -21,7 +21,7 @@
 // 就不返回路径，CLI 非零退出——避免拿一个不合法的会话去测出假数字。
 
 import { mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { join } from 'node:path'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -325,26 +325,10 @@ export function buildTurnEvents(turnCount, { profile = 'markdown', pad = 160, to
   return { events: ev, turns: turnCount, toolCalls }
 }
 
-// 旧构造器（保留以便对照）：0.2.2 已不认 `usage`，仅供不需要读回校验的
-// materialize 路径复用。
-export function buildEventsLegacy(n, { pad = 160 } = {}) {
-  const ev = []
-  let turn = 0
-  for (let seq = 0; seq < n; seq++) {
-    const kind = seq % 5
-    const time = 1_700_000_000_000 + seq
-    const p = text(pad)
-    if (kind === 0) ev.push({ type: 'turn/start', seq, time, data: { turn: ++turn, pad: p } })
-    else if (kind === 1) ev.push({ type: 'step/start', seq, time, data: { turn, step: 1, pad: p } })
-    else if (kind === 2) ev.push({ type: 'step/end', seq, time, data: { turn, step: 1, pad: p } })
-    else if (kind === 3) ev.push({ type: 'turn/end', seq, time, data: { turn, reason: { kind: 'completed' }, pad: p } })
-    else ev.push({ type: 'usage', seq, time, data: { turn, step: 1, usage: { inputTokens: 10, outputTokens: 20 }, pad: p } })
-  }
-  return ev
-}
+// 旧构造器（0.2.2 已不认 `usage`）已删除；只保留真实会话形状的 buildTurnEvents。
 
 // 装载真实 jsonl 后端（0.2.1+ 只导出 cordis 插件，必须经 Context.plugin）。
-async function loadJsonlBackend(dshRoot, root) {
+async function loadJsonlBackend(root) {
   const { Context } = await import('@deepseek-ai/cordis')
   const jsonl = await import('@deepseek-ai/dsh-session-persistence-jsonl')
   const ctx = new Context()
@@ -393,17 +377,16 @@ async function verifySession(service, id, expected) {
 
 // 生成会话并落盘。返回 { id, events, bytes, path }。
 export async function generateSession({
-  dshRoot, sessionsRoot, id, eventCount, turns, cwd,
+  sessionsRoot, id, eventCount, turns, cwd,
   pad = 160, profile = 'plain', toolBytes = 12000, seed, verify = true,
 }) {
-  const persistenceMod = await import('@deepseek-ai/dsh-session-persistence-jsonl')
   const sessionMod = await import('@deepseek-ai/dsh-session')
-  const { Session, SESSION_FORMAT_VERSION, SessionStore } = sessionMod
+  const { Session, SESSION_FORMAT_VERSION } = sessionMod
 
   mkdirSync(sessionsRoot, { recursive: true })
   // 后端 root 就设成隔离 home 的 sessions 根：路径布局与 dsh 自己产出的完全一致
   // （<root>/<projectKey(cwd)>/<session-id>/session.v4.jsonl.zstd）。
-  const { ctx, service } = await loadJsonlBackend(dshRoot, sessionsRoot)
+  const { ctx, service } = await loadJsonlBackend(sessionsRoot)
 
   const header = {
     version: SESSION_FORMAT_VERSION,
@@ -436,13 +419,14 @@ export async function generateSession({
     verified = await verifySession(service, id, expected)
   }
 
+  // stat 必须在 ctx.stop 之前取：service 属于这个 Context，停掉之后句柄不可靠。
+  const stored = await service.stat?.(id)
+  const path = stored?.location?.path ?? null
+
   // 关掉装载后端的 Context（释放文件句柄/表锁），否则 dsh 起不来同一个根。
   try { await ctx.stop?.() } catch { /* best effort */ }
   await sleep(200)
 
-  const stored = await service.stat?.(id)
-  const path = stored?.location?.path ?? null
-  await persistenceMod // 保持 import 引用，避免被裁剪
   return {
     id,
     events: events.length,
@@ -450,8 +434,5 @@ export async function generateSession({
     toolCalls: expected.toolCalls ?? null,
     verified,
     path,
-    sessionStoreProto: typeof SessionStore,
   }
 }
-
-export { dirname }

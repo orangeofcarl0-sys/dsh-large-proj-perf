@@ -163,5 +163,28 @@ check('bytes-per-event is a sane estimate (300-500)', BYTES_PER_EVENT >= 300 && 
   check('stats: reports cached entries', s?.cachedEntries === 3)
 }
 
+// ---- stats 载荷形状与唯一复位清单（v1.16.0）----
+{
+  const { createStats } = await import('../lib/stats.js')
+  const stats = createStats()
+  check('stats: memoryBudget present but null when off', stats.memoryBudget === null)
+  check('stats: reset is not enumerable', Object.keys(stats).includes('reset') === false)
+  check('stats: JSON shape still carries memoryBudget:null', JSON.stringify(stats).includes('"memoryBudget":null'))
+  stats.forks = 2
+  stats.render.pages.push({ kind: 'x' })
+  stats.render.sends.push({ bytes: 1 })
+  stats.memoryBudget = { budgetBytes: 1024, cachedEntries: 3, estimatedBytes: 9 }
+  stats.patches.renderTiming = 'active'
+  stats.dshVersion = '0.2.2-rc.1'
+  stats.reset()
+  check('stats: reset clears counters and arrays',
+    stats.forks === 0 && stats.render.pages.length === 0 && stats.render.sends.length === 0)
+  check('stats: reset keeps installation state',
+    stats.patches.renderTiming === 'active' && stats.dshVersion === '0.2.2-rc.1')
+  check('stats: reset keeps budget and clears usage',
+    stats.memoryBudget.budgetBytes === 1024
+      && stats.memoryBudget.cachedEntries === 0 && stats.memoryBudget.estimatedBytes === 0)
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)
