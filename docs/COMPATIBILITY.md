@@ -1,7 +1,8 @@
 # 兼容性与插件规范
 
-> **验证边界**：本文的实测结论以 **dsh 0.2.2-rc.1** 为基准。版本矩阵里每一行的
-> 结论来自该版本发布时对关键包源码的逐字节比对，不是对未来的预测。
+> **验证边界**：本文的实测结论以 **dsh 0.2.2-rc.5** 为当前基准；rc.1→rc.5 的
+> 每个版本都做过关键包逐文件比对。版本矩阵里每一行的结论来自该版本发布时对关键包
+> 源码的逐字节比对，不是对未来的预测。
 
 本文面向维护者：记录各 dsh 版本对插件作用点的影响、破坏性变更、两个容易混淆的
 版本语义，以及插件清单规范。
@@ -47,9 +48,11 @@ falls inside engines.dsh`），并要求两处清单逐项相同。
 | 0.2.1-rc.2 ~ rc.5 | **纯版本刷新**。关键包源码与 rc.1/rc.3 逐字节一致，作用点零影响 |
 | **0.2.2-rc.1** | **五处变更**（见下节）。这是 0.2.x 线上第一个需要改插件代码的版本，也是当前支持下界 |
 | 0.2.2-rc.2 | **包版本刷新**。`npm test` 全绿（`verify_compat` 对 rc.2 的真实包源码跑全部特征断言，含新增的渲染链路上游形状断言），已登记进 `KNOWN_DSH_VERSIONS` |
+| 0.2.2-rc.3 / rc.4 / rc.5 | **同线小版本，作用点零变化**。逐版本比对：rc.3 只改 `dsh-api-session-controller/lib/typert.host.js` 的类型声明；rc.4 只给 `dsh-session-persistence-jsonl/lib/worker.cjs` 加 `CONTENT_REFUSED` 错误码；rc.5 无源码变化。七个作用点包（session / jsonl persistence / projection / turn-outline / query / session-controller / gateway）的源码逐字节一致。rc.5 上 `npm test` 13/13 全绿，三个版本均登记进 `KNOWN_DSH_VERSIONS` |
 
 **未验证的版本**：`0.1.3` 正式版、`0.1.4`、`0.1.6` 从未实测（现已不在支持范围内）；
-`0.2.2` 的更高小版本尚未出现，遇到时跑 `node tests/verify_compat.mjs` 确认。
+`0.2.2` 的更高小版本出现时，先跑 `node tests/verify_compat.mjs` 与
+`npm test`，再决定是否登记。
 
 ## 0.1.3-alpha.2：persistence 重写
 

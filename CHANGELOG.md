@@ -43,6 +43,19 @@
 
 ## [Unreleased]
 
+<a id="v1-16-2"></a>
+## [1.16.2] — 2026-11-19
+
+兼容性跟随：登记 dsh `0.2.2-rc.3`–`rc.5`。**行为零变化。**
+
+### 兼容性
+
+- 验证 dsh `0.2.2-rc.3 / rc.4 / rc.5`：七个作用点包逐版本比对——rc.3 只改
+  `dsh-api-session-controller/lib/typert.host.js` 的类型声明，rc.4 只给
+  `dsh-session-persistence-jsonl/lib/worker.cjs` 加 `CONTENT_REFUSED` 错误码，
+  rc.5 无源码变化。rc.5 上 `npm test` 13/13、353 条断言全绿；三个版本都登记进
+  `KNOWN_DSH_VERSIONS`，启动不再打未知版本告警。
+
 <a id="v1-16-1"></a>
 ## [1.16.1] — 2026-11-14
 

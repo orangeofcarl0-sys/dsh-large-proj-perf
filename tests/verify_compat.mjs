@@ -33,7 +33,7 @@ const dshPkg = JSON.parse(readFileSync(join(dshRoot, 'package.json'), 'utf8'))
 
 // 插件开发/验证过的版本（与 lib/runtime.js 的 KNOWN_DSH_VERSIONS 保持一致，
 // 且必须落在 engines.dsh 声明的范围内）；不在列表里打 WARN（结构断言照跑，人工确认兼容性）
-const KNOWN_VERSIONS = ['0.2.2-rc.1', '0.2.2-rc.2']
+const KNOWN_VERSIONS = ['0.2.2-rc.1', '0.2.2-rc.2', '0.2.2-rc.3', '0.2.2-rc.4', '0.2.2-rc.5']
 console.log(`dsh version: ${dshPkg.version} (root: ${dshRoot})`)
 if (!KNOWN_VERSIONS.includes(dshPkg.version)) {
   warn(`dsh ${dshPkg.version} not in known list ${KNOWN_VERSIONS.join('/')}`, 'verify compatibility manually')
