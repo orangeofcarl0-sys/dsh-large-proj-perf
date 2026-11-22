@@ -17,6 +17,7 @@ const check = (label, cond, extra = '') => {
 const { installMemoryBudget } = await import('../lib/memory-budget.js')
 // BYTES_PER_EVENT 在 v1.10.0 移到了 constants.js（原先从 memory-budget 导出）
 const { BYTES_PER_EVENT } = await import('../lib/constants.js')
+const { estimateEntryBytes } = await import('../lib/event-bytes.js')
 
 const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms))
 
@@ -161,6 +162,75 @@ check('bytes-per-event is a sane estimate (300-500)', BYTES_PER_EVENT >= 300 && 
   check('stats: reports budget', s?.budgetBytes === 1024 * 1048576)
   check('stats: reports estimated bytes', s?.estimatedBytes === 3 * 50000 * BYTES_PER_EVENT, String(s?.estimatedBytes))
   check('stats: reports cached entries', s?.cachedEntries === 3)
+  check('stats: reports cached events', s?.cachedEvents === 150000, String(s?.cachedEvents))
+  check('stats: memo fields present', s?.memoEntries === 0 && s?.memoBytes === 0)
+}
+
+// ---- 内容感知：大消息条目显著高于 400 B/事件 ----
+{
+  const bigEvents = Array.from({ length: 1000 }, () => ({ type: 'user/message', data: { content: 'x'.repeat(4000) } }))
+  const estimate = estimateEntryBytes({ events: bigEvents })
+  check('content estimate: above the flat floor', estimate > bigEvents.length * BYTES_PER_EVENT, String(estimate))
+  check('content estimate: ~4 KB per event', estimate / bigEvents.length > 3000, String(Math.round(estimate / bigEvents.length)))
+  check('content estimate: cached per events array', estimateEntryBytes({ events: bigEvents }) === estimate)
+  check('content estimate: empty entry is 0', estimateEntryBytes({ events: [] }) === 0 && estimateEntryBytes(null) === 0)
+}
+
+// ---- 单条超预算：保留新条目，不抖动 ----
+{
+  const h = makeHarness({ eventsPerSession: 100000, cacheSessions: 1, budget: 1 * 1048576 })
+  installMemoryBudget(h.pc, h.pc.ctx)
+  const entry = h.cache.get('session-0')
+  h.reader.store('session-0', entry)
+  check('oversized entry: kept', h.cache.has('session-0'), `size=${h.cache.size}`)
+  check('oversized entry: no trim', h.stats.memoryBudgetTrimmed === 0, String(h.stats.memoryBudgetTrimmed))
+  check('oversized entry: counted over budget', h.stats.memoryBudgetOverBudget >= 1, String(h.stats.memoryBudgetOverBudget))
+}
+
+// ---- lease 释放后复查：直接调 evictPastCapacity（无 keep）也能裁 ----
+{
+  const h = makeHarness({ eventsPerSession: 100000, cacheSessions: 5, budget: 100 * 1048576 })
+  installMemoryBudget(h.pc, h.pc.ctx)
+  check('release check: 5 entries before', h.cache.size === 5)
+  h.reader.evictPastCapacity()
+  check('release check: trimmed to 2', h.cache.size === 2, `kept=${[...h.cache.keys()].join(',')}`)
+  check('release check: counter', h.stats.memoryBudgetTrimmed === 3, String(h.stats.memoryBudgetTrimmed))
+}
+
+// ---- coldLogMemo：超预算时至少保留最新一条 ----
+{
+  const memo = new Map()
+  const proto = {
+    async decodeStoredLog(id, events) {
+      this.coldLogMemo.delete(id)
+      this.coldLogMemo.set(id, { events })
+      return { id }
+    },
+  }
+  const persistence = Object.create(proto)
+  persistence.coldLogMemo = memo
+  const stats = { memoryBudgetTrimmed: 0, memoryBudgetFreedBytes: 0, memoryBudgetOverBudget: 0 }
+  const reader = { cache: new Map(), store() {}, evictPastCapacity() {} }
+  const ctx = {
+    get: (name) => {
+      if (name === 'sessionQuery') return { _observations: reader }
+      if (name === 'sessionPersistence') return persistence
+      return void 0
+    },
+  }
+  const pc = {
+    ctx, config: { memoryBudgetBytes: 50 * 1048576 }, stats, disposers: [],
+    safeGet: (c, n) => c.get?.(n),
+    log: () => {}, logErr: () => {}, setPatchStatus: () => {},
+  }
+  installMemoryBudget(pc, ctx)
+  const eventsA = new Array(100000).fill(null)
+  const eventsB = new Array(100000).fill(null)
+  await persistence.decodeStoredLog('a', eventsA)
+  await persistence.decodeStoredLog('b', eventsB)
+  check('memo: keeps the newest entry', memo.has('b'), `keys=${[...memo.keys()].join(',')}`)
+  check('memo: never empties the cache', memo.size === 1, String(memo.size))
+  check('memo: trim counted', stats.memoryBudgetTrimmed === 1, String(stats.memoryBudgetTrimmed))
 }
 
 // ---- stats 载荷形状与唯一复位清单（v1.16.0）----
@@ -173,7 +243,10 @@ check('bytes-per-event is a sane estimate (300-500)', BYTES_PER_EVENT >= 300 && 
   stats.forks = 2
   stats.render.pages.push({ kind: 'x' })
   stats.render.sends.push({ bytes: 1 })
-  stats.memoryBudget = { budgetBytes: 1024, cachedEntries: 3, estimatedBytes: 9 }
+  stats.memoryBudget = {
+    budgetBytes: 1024, cachedEntries: 3, cachedEvents: 300,
+    estimatedBytes: 9, memoEntries: 2, memoBytes: 5,
+  }
   stats.patches.renderTiming = 'active'
   stats.dshVersion = '0.2.2-rc.1'
   stats.reset()
@@ -183,7 +256,9 @@ check('bytes-per-event is a sane estimate (300-500)', BYTES_PER_EVENT >= 300 && 
     stats.patches.renderTiming === 'active' && stats.dshVersion === '0.2.2-rc.1')
   check('stats: reset keeps budget and clears usage',
     stats.memoryBudget.budgetBytes === 1024
-      && stats.memoryBudget.cachedEntries === 0 && stats.memoryBudget.estimatedBytes === 0)
+      && stats.memoryBudget.cachedEntries === 0 && stats.memoryBudget.cachedEvents === 0
+      && stats.memoryBudget.estimatedBytes === 0
+      && stats.memoryBudget.memoEntries === 0 && stats.memoryBudget.memoBytes === 0)
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAIL`)

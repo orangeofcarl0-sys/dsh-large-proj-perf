@@ -16,6 +16,59 @@
 > **版本号规则见 [docs/VERSIONING.md](docs/VERSIONING.md)**：版本在发布时决定，
 > 开发中的变更先记在 `[Unreleased]`，不逐次改 `package.json`。
 
+## [Unreleased]
+
+### 事件缓存：内容感知估算 + 多会话实测
+
+- **估算改为内容采样**：`lib/event-bytes.js` 按事件类型分层（类型内 ≤1024 个
+  全量精确计费，较大类型每种采样 128 个），`JSON 字节 × 1.15 + 字符串值个数 × 40`，
+  下限 400 B/事件。旧实现 `events.length × 400` 对 91k 事件 / 4 KB 消息的会话
+  低估 3.3 倍；旧固定 8 事件块在同一批真实结构上误差 −80%~−14%。真实会话只读
+  采样 + 等长伪文本合成后，新模型 7 组误差 **−18%~+14%**（MEASUREMENTS §2.4.1）。
+- **预算行为修复**：刚插入的条目不再被本轮预算淘汰（单条超预算时保留并计
+  `memoryBudgetOverBudget`，避免每次打开都重新解码）；包装
+  `evictPastCapacity`，lease 释放后立即复查；`coldLogMemo` 超预算时至少保留
+  最新一条。
+- **观测面**：`stats.memoryBudget` 新增 `cachedEvents` / `memoEntries` /
+  `memoBytes`；新增 `debug.projectionCache`（`debugApi=true`，只读 rows/bytes）。
+- **多会话实测**（5 × 91k / 4 KB，passive read）：400 B 估算 + 512 MiB 保留
+  5 条、776.9 MiB；内容感知 512 MiB 保留 4 条、662.4 MiB；256 MiB 保留 2 条、
+  433.1 MiB；128 MiB 保留 1 条、317.6 MiB。淘汰代价：重开 2.3–2.7 s（热
+  177 ms）。
+- **真实结构复核**：6 个真实会话只读复制后同结构合成（正文等长替换），
+  passive read 512 MiB 保留 5 条、665.8 MiB；256 MiB 保留 3 条、352.1 MiB
+  （−313.7 MiB / −47%），重开 2.3 s。估算误差 −18%~+14%（MEASUREMENTS §2.4.1/§2.4.6）。
+- **真实语料中值 profile**：16 个真实会话 / 103,184 事件统计（JSON 2,116 B/事件、
+  字符串 53/事件、tool result p50 1,038）；`real-profile.json` + `make-realistic.mjs`
+  生成 230 turn / 30k 事件类真会话（JSON 2,081、字符串 52、nodes 11）。5 个生成
+  会话估算误差 **−4.6%~+2.3%**；512 MiB 保留 3 条、256 MiB 保留 2 条
+  （MEASUREMENTS §2.4.7）。
+- **重要边界**：Web 打开会 promote live Agent；关页 + 强制 GC 只释放
+  0.6–3.2 MiB，缓存淘汰不释放 live Session 的事件树（4 个 91k 会话仍约
+  690 MiB）。live Session 驱逐需要上游接口（MEASUREMENTS §2.4.3）。
+- **投影缓存行**：实测 5 行 / 10.4 MB（单行 2.60 MB），低于「64 MiB 或稳态
+  10%」门槛，本轮不做自动淘汰，只保留只读探针。
+- **工具**：`mem-open.mjs` 支持多会话 / 预算 / 重开 / 关页后释放；新增
+  `mem-read.mjs`、`event-bytes.mjs`、`compare-mem.mjs`；`make-session.mjs`
+  导出 `loadJsonlBackend`。
+- **测试**：新增 `test_event_bytes.mjs`；`test_memory_budget.mjs` 补
+  keep / lease / memo 用例；`npm test` 16 套件 / 430 条断言（含新增的分析工具套件）。
+
+### live Session 驱逐 / 日志窗口化源码分析
+
+- **静态结论**：`AgentHandle.dispose()` 是唯一完整 teardown，但 Web controller
+  在 resume 后丢弃 handle；`SessionStore`/`AgentRegistry` 无公开按 id dispose；
+  日志窗口化受 `seq = log.length = 数组下标` 约束，牵动投影/fork/持久化/分页。
+- **动态对照**：真实 dispose 单独释放 **6.6 MiB**（cache 仍持有约 116 MiB）；
+  dispose + 清 cache 释放 **121.6 MiB**（event tree 实测约 115.6 MiB + live 开销）；
+  detach-only 堆不降、重开 **+104.8 MiB**（zombie）；trim + 清 cache 释放
+  106.7 MiB（实测 1,347 B/事件），但 seq/读取/fork 失效。详见
+  `docs/LIVE-SESSION-ANALYSIS.md`。
+- **观测/分析工具**：`debug.sessions`、`debug.heap`（只读）；分析专用
+  `debugAgentHandles`（默认关，捕获 AgentHandle）；`analyze-heap.mjs` 支持
+  edges/retained size/retainer path；新增 `mem-live.mjs` 状态机探针。
+- **测试**：新增 `test_agent_debug.mjs`、`test_heap_analyzer.mjs`。
+
 ## 重要版本速览
 
 标题带 **⚠️ 重要** 的版本对使用者有实际影响。判定标准只有三条：
@@ -26,6 +79,7 @@
 
 | 版本 | 类型 | 一句话 |
 |---|---|---|
+| [Unreleased](#unreleased) | **性能里程碑** | 内容感知事件缓存估算；多会话只读实测；live Agent 边界与驱逐/窗口化源码分析 |
 | [1.16.0](#v1-16-0) | **文档归一 + 修复** | 测量文档单一叙事（一个数字一个 owner）；诊断设施生命周期/所有权修复；新增 vm bundle 与文档测试 |
 | [1.15.0](#v1-15-0) | **测量补全** | 响应腿拆到毫秒（写队列/deflate/网络）；30k turn 跳 turn 1 **实测渲染进程 OOM 重载**；滚轮路径校验 |
 | [1.14.0](#v1-14-0) | **测量补全** | 500 ms 链路归因（服务端 encode + 写队列，不是浏览器）；markdown op 级成本；30k 跳转曲线（外推后由 1.15 推翻） |

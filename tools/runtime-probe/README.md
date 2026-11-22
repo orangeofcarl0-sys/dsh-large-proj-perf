@@ -116,6 +116,109 @@ node tools/runtime-probe/make-session-cli.mjs --home "$RT/home" \
 `tool/result`）。生成后用真实后端**读回自检**（事件数、turn 数、工具配对），
 失败直接退出 1，不打印路径。`--events` 必须是 8 的倍数（每个 turn 固定 8 个事件）。
 
+## 多会话内存探针（Unreleased）
+
+两个工具回答的是不同问题，不能混用：
+
+| 工具 | 路径 | 会不会 promote live Agent | 量什么 |
+|---|---|---|---|
+| `mem-open.mjs` | Web 点击打开 | 会 | 打开峰值/首行/关页后释放；**live Agent 仍持有事件树** |
+| `mem-read.mjs` | `session/projections` + `session/events` | 不会 | 观察缓存条目本身的内存与淘汰效果 |
+
+```sh
+# Web 打开 5 个会话，512 MiB 预算，最后重开第 1 个
+node tools/runtime-probe/mem-open.mjs --home "$RT/home" --agents "$RT/agents" \
+  --sessions session-mem-probe-91k-1,...,session-mem-probe-91k-5 \
+  --events 91008 --budget-bytes 536870912 --label web-512 --reopen first \
+  --out "$RT/mem-open/web-512" --gc
+
+# 只读 5 个会话（不 promote），量缓存淘汰
+node tools/runtime-probe/mem-read.mjs --home "$RT/home" --agents "$RT/agents" \
+  --sessions session-mem-probe-91k-1,...,session-mem-probe-91k-5 \
+  --events 91008 --budget-bytes 268435456 --label read-256 --reopen first \
+  --out "$RT/mem-read/read-256"
+
+# 校准内容感知估算（JSON 字节 vs 插件估算）
+node --max-old-space-size=8192 tools/runtime-probe/event-bytes.mjs \
+  --home "$RT/home" --session session-mem-probe-91k-1
+
+# 汇总多个 arm
+node tools/runtime-probe/compare-mem.mjs --out "$RT/compare" \
+  "$RT/mem-read/read-512/report.json" "$RT/mem-read/read-256/report.json"
+```
+
+`mem-open` 每个会话用全新 Chrome profile（保证进入时没有已打开会话），关页后
+再 GC 并取 `stats.get`。`mem-read` 不启动浏览器；读完 RPC 后 lease 立即释放，
+预算可以在同一轮淘汰。两者都支持 `--budget-bytes` 注入
+`DSH_PERF_MEMORY_BUDGET_BYTES`，`--reopen first|<id>` 量被淘汰会话的冷读成本。
+投影缓存行由 `debug.projectionCache` 只读汇总（需 `DSH_PERF_DEBUG_API=true`）。
+
+### live Session 状态机与快照归属
+
+```sh
+# cache-only → Web live → 关页 → 动作 → 重开；动作 control|dispose|detach|trim
+node tools/runtime-probe/mem-live.mjs --home "$RT/home" --agents "$RT/agents" \
+  --session session-mem-probe-91k-1 --action dispose --clear-cache \
+  --out "$RT/mem-live/dispose" --duration-ms 18000
+
+# 只在 live 状态取一张快照，再用 analyzer 看 retained size / retainer path
+node tools/runtime-probe/mem-live.mjs ... --action control \
+  --snapshot-dir "$RT/mem-live/snapshots" --snapshot-states live
+node --max-old-space-size=8192 tools/runtime-probe/analyze-heap.mjs \
+  "$RT/mem-live/snapshots/snapshot-live.heapsnapshot" \
+  --target session:session-mem-probe-91k-1
+```
+
+- `mem-live` 需要 `DSH_PERF_DEBUG_API=true` + `DSH_PERF_DEBUG_AGENT_HANDLES=true`
+  （脚本自动注入）。后者只在隔离 profile 打开；它会包装 `agents.resume/create`
+  捕获 AgentHandle，暴露 `__dshPerfProbe.dispose/detach/trim`。
+- `dispose`/`detach`/`trim` 都是**破坏性**操作：只在一次性进程、idle 会话上跑。
+- `debug.sessions` 只读计数/长度，不调用 `snapshotEvents()`；`debug.heap` 只读
+  v8 统计。两者都受 `debugApi` 门禁。
+- 快照里的 retainer path 可能经过 `__dshPerfProbe.handles`（探针强引用），这是
+  分析工件；Agent 同时被 `AgentRegistry.store` 持有。
+- 快照会强制 GC 并临时分配大量内存：不要用它前后的 heap 数字做结论，快照只用于
+  retained size/共享关系。
+
+> **GC 很慢**：850 MiB 堆上的 `HeapProfiler.collectGarbage` 可能跑几分钟；CDP
+> 命令统一带 60 s 超时，超时只告警不挂死。别把 GC 放进高频采样循环。
+
+### 真实会话结构统计 / 同结构合成
+
+```sh
+# 只输出聚合：事件类型、events/turn、JSON/文本字节分位、tool 配对、节点/字符串数
+node --max-old-space-size=8192 tools/runtime-probe/session-stats.mjs \
+  --home "$RT/real-in/home" --session session-<id> --json
+
+# 同结构合成：事件类型/seq/turn/step/tool 配对/内容块保留；
+# 正文替换为等长伪文本（长内容与 CONTENT_KEYS 字段），生成可直接被 dsh 读取的会话
+node --max-old-space-size=8192 tools/runtime-probe/session-stats.mjs \
+  --home "$RT/real-in/home" --session session-<id> \
+  --synth-out "$RT/real-synth/home" --synth-id session-real-1 --seed 42
+```
+
+真实会话可能是 fork/seeded：脚本会保留 `isSeeded` 与 inherited cut，并在
+`service.create(..., { inheritedEventCount })` 时使用真实切点。合成只用于内存/字节
+分布校准，不保证 surface/渲染语义；统计与报告不输出对话文本。短枚举/ID/版本/
+`policyKey`/`mode` 等结构字符串会保留以通过格式校验，长正文与 `content`/
+`text`/`command` 等字段替换为等长伪文本。
+
+### 中值行为 profile（类真合成）
+
+```sh
+# 汇总一批 session-stats JSON 的分布中值
+node tools/runtime-probe/corpus-stats.mjs --stats-dir "$RT/real-sample/stats"
+
+# 按 real-profile.json 的中值参数生成 230 turn 类真会话
+node --max-old-space-size=8192 tools/runtime-probe/make-realistic.mjs \
+  --home "$RT/realmed/home" --id session-realmed-1 --turns 230 --seed 42
+```
+
+`real-profile.json` 来自 16 个真实会话 / 103,184 事件的中值：JSON 2,116 B/事件、
+字符串 53/事件、tool result p50 1,038、events/turn 大样本 112–198。生成器保留
+tool 调用配对、assistant stream 片段、请求头 tool schema 与长尾大小分布；
+不是复制某一个真实会话。校准结果见 MEASUREMENTS §2.4.7。
+
 ## 响应腿编码基准
 
 ```sh

@@ -197,13 +197,13 @@ function toolOutput(name, target, rng) {
  * @param n - plain 档位的事件数上限
  * @param options - 内容档位与随机种子
  */
-export function buildEvents(n, { pad = 160, profile = 'plain', seed } = {}) {
+export function buildEvents(n, { pad = 160, profile = 'plain', seed, timeBase = 1_700_000_000_000 } = {}) {
   if (seed !== undefined) nextRand = makeRng(seed)
   const ev = []
   let seq = 0
   let turn = 0
   const push = (type, data, extra) => {
-    ev.push({ type, seq: seq++, time: 1_700_000_000_000 + seq, data, ...(extra ?? {}) })
+    ev.push({ type, seq: seq++, time: timeBase + seq, data, ...(extra ?? {}) })
   }
   while (ev.length < n) {
     turn += 1
@@ -247,13 +247,13 @@ export function buildEvents(n, { pad = 160, profile = 'plain', seed } = {}) {
  * @param options - profile: 'plain' | 'markdown' | 'tools'
  * @returns { events, turns, toolCalls }
  */
-export function buildTurnEvents(turnCount, { profile = 'markdown', pad = 160, toolBytes = 12000, seed = 0x9e3779b9 } = {}) {
+export function buildTurnEvents(turnCount, { profile = 'markdown', pad = 160, toolBytes = 12000, seed = 0x9e3779b9, timeBase = 1_700_000_000_000 } = {}) {
   const rng = makeRng(seed)
   const ev = []
   let seq = 0
   let toolCalls = 0
   const push = (type, data, extra) => {
-    ev.push({ type, seq: seq++, time: 1_700_000_000_000 + seq, data, ...(extra ?? {}) })
+    ev.push({ type, seq: seq++, time: timeBase + seq, data, ...(extra ?? {}) })
   }
   const route = { provider: 'probe-provider', model: 'probe-model' }
   const contentOf = (target) => (profile === 'plain' ? text(target) : markdownText(target, rng))
@@ -328,7 +328,8 @@ export function buildTurnEvents(turnCount, { profile = 'markdown', pad = 160, to
 // 旧构造器（0.2.2 已不认 `usage`）已删除；只保留真实会话形状的 buildTurnEvents。
 
 // 装载真实 jsonl 后端（0.2.1+ 只导出 cordis 插件，必须经 Context.plugin）。
-async function loadJsonlBackend(root) {
+// 导出给 event-bytes.mjs 复用：打开已有会话读回事件，不需要再走一遍生成路径。
+export async function loadJsonlBackend(root) {
   const { Context } = await import('@deepseek-ai/cordis')
   const jsonl = await import('@deepseek-ai/dsh-session-persistence-jsonl')
   const ctx = new Context()
@@ -375,10 +376,39 @@ async function verifySession(service, id, expected) {
   }
 }
 
+/** 把已构造好的事件写成一个 v4 会话（供 real-median 生成器复用）。 */
+export async function writeSessionEvents({ sessionsRoot, id, events, cwd = 'F:\\dsh-rt\\probe-workspace', verify = true }) {
+  const sessionMod = await import('@deepseek-ai/dsh-session')
+  const { Session, SESSION_FORMAT_VERSION } = sessionMod
+  mkdirSync(sessionsRoot, { recursive: true })
+  const header = {
+    version: SESSION_FORMAT_VERSION,
+    id,
+    createdAt: Date.now(),
+    cwd,
+    isSeeded: false,
+    delegationDepth: 0,
+  }
+  const session = Session.create(id, events, header)
+  const { ctx, service } = await loadJsonlBackend(sessionsRoot)
+  try {
+    const handle = await service.create(session.header, { inheritedEventCount: 0 })
+    await handle.append(session.snapshotEvents())
+    await handle.close()
+    let verified = null
+    if (verify) verified = await verifySession(service, id, { events: events.length })
+    const stored = await service.stat?.(id)
+    return { id, events: events.length, verified, path: stored?.location?.path ?? null }
+  } finally {
+    try { await ctx.stop?.() } catch { /* best effort */ }
+    await sleep(200)
+  }
+}
+
 // 生成会话并落盘。返回 { id, events, bytes, path }。
 export async function generateSession({
   sessionsRoot, id, eventCount, turns, cwd,
-  pad = 160, profile = 'plain', toolBytes = 12000, seed, verify = true,
+  pad = 160, profile = 'plain', toolBytes = 12000, seed, verify = true, timeBase,
 }) {
   const sessionMod = await import('@deepseek-ai/dsh-session')
   const { Session, SESSION_FORMAT_VERSION } = sessionMod
@@ -400,11 +430,11 @@ export async function generateSession({
   let events
   let expected
   if (turns !== undefined) {
-    const built = buildTurnEvents(turns, { profile, pad, toolBytes, seed })
+    const built = buildTurnEvents(turns, { profile, pad, toolBytes, seed, timeBase })
     events = built.events
     expected = { events: events.length, turns: built.turns, toolCalls: profile === 'tools' ? built.toolCalls : undefined }
   } else {
-    events = buildEvents(eventCount, { pad, profile: 'plain', seed })
+    events = buildEvents(eventCount, { pad, profile: 'plain', seed, timeBase })
     expected = { events: events.length }
   }
 

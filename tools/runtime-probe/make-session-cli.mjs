@@ -5,7 +5,10 @@
 //
 //   node tools/runtime-probe/make-session-cli.mjs --home <home> \
 //     [--id session-probe-heavy] [--turns 300] [--profile tools] \
-//     [--tool-bytes 12000] [--seed 42] [--cwd <path>]
+//     [--tool-bytes 12000] [--seed 42] [--time-base now] [--cwd <path>]
+//
+// `--time-base now` 让事件时间落在当前时刻，Web 侧栏按最近活动排序时才能看到
+// 这份 fixture；默认仍用固定的 2023 基准，保持历史测量可复现。
 //
 // 两种模式：
 //   --events N          按事件数生成（plain 档位，8 事件/turn）。默认 240000：
@@ -44,6 +47,12 @@ const pad = Number(arg('pad', '160'))
 const profile = arg('profile', turns === undefined ? 'plain' : 'markdown')
 const toolBytes = Number(arg('tool-bytes', '12000'))
 const seed = arg('seed', undefined)
+const timeBaseArg = arg('time-base', undefined)
+const timeBase = timeBaseArg === undefined ? undefined : (timeBaseArg === 'now' ? Date.now() : Number(timeBaseArg))
+if (timeBase !== undefined && !Number.isFinite(timeBase)) {
+  console.error('--time-base must be "now" or an epoch millisecond number')
+  process.exit(1)
+}
 const id = arg('id', `session-probe-${Date.now().toString(36)}`)
 const cwd = arg('cwd', 'F:\\dsh-rt\\probe-workspace')
 
@@ -54,6 +63,7 @@ try {
     ...(turns === undefined ? { eventCount: events } : { turns: Number(turns) }),
     pad, profile, toolBytes,
     ...(seed === undefined ? {} : { seed: Number(seed) }),
+    ...(timeBase === undefined ? {} : { timeBase }),
     verify: true,
   })
   console.log(JSON.stringify({

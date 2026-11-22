@@ -26,7 +26,7 @@
 | 侧 | 能力 | 效果 |
 |---|---|---|
 | 读取 | `fastTurnOutline` | 冷读从十秒级降到秒级（MEASUREMENTS §1.3） |
-| 驻留 | `memoryBudget` | 稳态 RSS 下降约一半（MEASUREMENTS §2.4） |
+| 驻留 | `memoryBudget` | 只读稳态随预算收紧；Web live Agent 不在预算内（MEASUREMENTS §2.4） |
 | 渲染 | `clientContainment`（浏览器侧） | 批量翻页阻塞约减半（RENDER-ANALYSIS §7） |
 | 渲染 | `renderTiming`（诊断） | 首行/稳定/长任务 + 服务端每页耗时与字节 |
 | 写入 | 零拷贝 fork | 直测有收益，但 UI 不走这条路（MEASUREMENTS §1.4） |
@@ -165,24 +165,36 @@ MEASUREMENTS §1.2–§1.3。
 
 ### 3.4 事件缓存字节预算
 
-**patch 什么**：两处
+**patch 什么**：三处
 
 | 目标 | 手法 |
 |---|---|
-| `sessionQuery._observations.store` | 包装实例方法，每次插入后按估算字节总量淘汰 |
-| `persistence` 原型的 `decodeStoredLog` | 包装原型方法，decompress 完成后裁剪 `coldLogMemo` |
+| `sessionQuery._observations.store` | 包装实例方法，插入后按估算字节总量淘汰；`keepId` 保护刚插入的条目 |
+| `_observations.evictPastCapacity` | 包装实例方法；上游在 store 与 lease 释放两处调用它，释放后立即复查字节预算 |
+| `persistence` 原型的 `decodeStoredLog` | 包装原型方法，解码完成后裁剪 `coldLogMemo`（至少保留最新一条） |
 
 **为什么需要**：上游的淘汰判据只有 `cache.size <= cacheCapacity`——只看条数，
-5 个大会话与 5 个小会话在它眼里一样。稳态 RSS 的实测曲线见 MEASUREMENTS §2.3。
+5 个大会话与 5 个小会话在它眼里一样。稳态内存的实测见 MEASUREMENTS §2.3/§2.4。
 
-**估算**：`events.length × 400 B`（实测 365 B/事件，留余量）。目的不是精确，是区分
-「5 个大会话」与「5 个小会话」。
+**估算**：`lib/event-bytes.js` 按事件类型分层：类型内 ≤1024 个事件全量
+stringify，较大类型每种采样 128 个；估算 `JSON 字节 × 1.15 + 字符串值个数 × 40`，
+下限 400 B/事件。小类型精确计费避免了真实会话长尾消息被采样漏掉；字符串
+header 项修正了 `JSON×1.15` 对真实会话约 2 倍的低估。校准见 MEASUREMENTS
+§2.4.1（7 组真实/合成 fixture，误差 −18%~+14%）。
 
 **安全判据**：只删 `refs === 0`（未被 lease 钉住）的条目，与上游
-`evictPastCapacity` 同一判据。全部被 pin 时允许暂时超预算并计入
-`stats.memoryBudgetOverBudget`。
+`evictPastCapacity` 同一判据。刚插入的条目永不因预算被删（单条超预算时保留并
+计入 `stats.memoryBudgetOverBudget`）；全部被 pin 时允许暂时超预算，lease
+释放后复查。
 
-**观测**：`stats.memoryBudget = { budgetBytes, cachedEntries, estimatedBytes }`。
+**观测**：`stats.memoryBudget = { budgetBytes, cachedEntries, cachedEvents,
+estimatedBytes, memoEntries, memoBytes }`。
+
+**边界**：live Agent 的事件树不在这两处缓存内，dsh 没有公开的 live Session
+驱逐接口。Web 打开一个会话会 promote 成 live Agent；缓存条目即使被淘汰，live
+Agent 仍持有 events 数组，内存不会下降（MEASUREMENTS §2.4.3）。预算只约束
+passive read 的缓存条目。live 驱逐/日志窗口化的源码与动态分析见
+[LIVE-SESSION-ANALYSIS.md](LIVE-SESSION-ANALYSIS.md)。
 
 **探测失败**：`sessionQuery._observations.cache` 不可达（上游改了私有字段名）→
 `inactive`，不做任何猜测。

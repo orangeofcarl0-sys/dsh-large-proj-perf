@@ -31,28 +31,31 @@ DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长
 
 ## 能力与效果
 
-数字都是 dsh 0.2.2 上的实测值，来源与测量边界见
-[docs/MEASUREMENTS.md](docs/MEASUREMENTS.md)（时间/空间）与
-[docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)（浏览器渲染）。
+![有插件 vs 无插件：冷读 21.2→3.0 秒，Web 首行 5.03→3.63 秒，打开峰值 Host 堆增量 +217→+118.7 MiB，批量翻页阻塞 2836→1489 毫秒；稳态内存持平](docs/assets/plugin-vs-none.svg)
 
-| 能力 | 解决什么 | 实测效果 | 默认 |
-|---|---|---|---|
-| **turnOutline 折叠加速** | 该投影单元每次 turn 整数组复制（O(n²)），占冷读 76% | 冷读 **21.2 s → 3.0 s** | 开 |
-| **事件缓存字节预算** | dsh 的缓存只按「会话条数」限容；6 个 18 MB 会话涨到 1.2 GB | 稳态 RSS **1324 → 690 MB** | 开（512 MiB） |
-| **离屏行 containment** | 聊天列表没有虚拟滚动，已加载的每一行都参与布局 | 批量翻页阻塞 **2 836 → 1 489 ms**（约 −47%），最长任务 416 → 244 ms；未测到滚动漂移 | 开 |
-| 分片 materialize | 落盘时把整个会话序列化成一个巨大字符串 | 2 帧 → 6 帧，消除 `RangeError` | 开 |
-| 零拷贝 fork | fork 时逐事件深拷贝整个会话 | 直测 -16% ~ -21%（**但 UI 不走这条路**，见下） | 开 |
-| 渲染耗时诊断 | 打开会话慢在哪一段无从得知 | 五段归因（请求/服务端/响应/派发/挂载）、`ws.send` 拆写队列与 deflate、LoAF 脚本归属、跳转与滚动窗口 | 关 |
-| 历史窗口预算 | 一页只按消息条数切，无字节上限 | 长会话 70 KB/页、重会话 1.7 MB/页；默认不动，按需收紧 | 关 |
-| 冷读回写 | 冷读后把投影状态写成缓存行 | **无耗时收益**，只让列表读看到新数据 | 关 |
-| 冷会话补行 | 磁盘上的大会话没有投影缓存行 | 启动 15 s 后批量补写 | 关 |
-| heap 上限告警 | V8 heap 上限过低时无任何提示 | 启动时检查并告警 | — |
+- **turnOutline 折叠加速**（默认开）：冷读 **21.2 s → 3.0 s**，把 O(n²) 的整数组复制换成 O(n)。
+- **事件缓存字节预算**（默认开，512 MiB）：无预算 5 条 776.9 MiB → 512 MiB 4 条 662.4 MiB / 256 MiB 2 条 433.1 MiB；按内容估算，真实会话的条目数随消息分布变化。
+- **离屏行 containment**（默认开）：批量翻页阻塞 **2 836 → 1 489 ms（−47%）**，最长任务 416 → 244 ms。
+- **分片 materialize**（默认开）：落盘 2 帧 → 6 帧，消除超大会话的 `RangeError`。
+- **零拷贝 fork**（默认开）：直测 **−16% ~ −21%**；但 Web UI 走 `agents.create({seed})`，不经过该补丁，`stats.forks = 0`。
+- **渲染耗时诊断**（默认关）：五段归因、`ws.send` 拆写队列与 deflate、LoAF 脚本归属；只采集，不改变渲染行为。
+- **历史窗口预算 / 冷读回写 / 冷会话补行**（默认关）：按需收紧页字节；回写无耗时收益；补行在启动 15 s 后批量写。
+- **V8 heap 上限告警**：启动时检查，过低时提示 `--max-old-space-size`。
+
+数字来源与测量边界见 [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md)（时间/空间）与
+[docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md)（浏览器渲染）。
 
 > 浏览器侧唯一有实测收益的**优化**是 `clientContainment`；`renderTiming` 只采集
 > 数据，不改变渲染行为。两者的测量条件与边界见
 > [docs/RENDER-ANALYSIS.md](docs/RENDER-ANALYSIS.md) §7/§9。
+>
+> 上面 91k 的数字来自均匀 4 KB 消息 fixture，**不能直接外推到真实对话**。用 6 个
+> 真实会话只读复制 + 等长伪文本同结构合成复核：512 MiB 保留 5 份、665.8 MiB；
+> 256 MiB 保留 3 份、352.1 MiB（−47%）。另按 16 个真实会话的中值生成 230 turn
+> 类真会话：512 MiB 保留 3 份、256 MiB 保留 2 份，估算误差 −4.6%~+2.3%。结构
+> 统计与估算误差见 [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md) §2.4.1/§2.4.6/§2.4.7。
 
-### 两条必须知道的限制
+### 三条必须知道的限制
 
 **① `stats.patches` 显示 `active` 不等于在真实链路上被调用。**
 
@@ -65,6 +68,15 @@ DeepSeek Harness（dsh）**大会话**性能插件。针对数十万事件的长
 
 正常日志走 `ctx.logger.info`，dsh 默认日志级别会过滤掉它——隔离实例里
 `[dsh-perf]` 行数为 0，尽管插件已正常装载。排错请用 `stats.get`，不要靠 grep 日志。
+
+**③ 事件缓存预算不覆盖 live Agent。**
+
+Web 打开会话会把它 promote 成 live Agent。实测关闭标签页后强制 GC 只释放
+0.6–3.2 MiB，4 个 91k 会话的 Host 堆仍有 689 MiB——缓存条目被淘汰了，但 live
+Session 自己仍持有事件树。缓存预算只对 passive read（会话列表/预览/RPC 读）的
+缓存条目生效；live Session 的驱逐需要上游接口，插件不能安全介入。完整的
+所有权/不变量分析与 dispose/detach/trim 动态对照见
+[docs/LIVE-SESSION-ANALYSIS.md](docs/LIVE-SESSION-ANALYSIS.md)。
 
 ## 安装
 
@@ -118,7 +130,7 @@ node --max-old-space-size=8192 <dsh 入口> web
 | 键 | 默认 | 单位 | 说明 |
 |---|---|---|---|
 | `fastTurnOutline` | `true` | — | `turnOutline` 的 O(n²) → O(n) |
-| `memoryBudgetBytes` | `536870912` | 字节 | 事件缓存总预算（512 MiB）；`0` 关闭 |
+| `memoryBudgetBytes` | `536870912` | 字节 | 事件缓存总预算（512 MiB，按内容估算）；`0` 关闭 |
 | `clientContainment` | `true` | — | 长转录离屏行 `content-visibility`（批量翻页阻塞约 −47%） |
 | `heapWarnBytes` | `6442450944` | 字节 | heap 上限告警阈值（6 GiB） |
 | `zeroCopyFork` | `true` | — | 零拷贝 fork |
@@ -137,11 +149,12 @@ node --max-old-space-size=8192 <dsh 入口> web
 | `backfillMaxSessions` | `8` | 个 | 补行扫描会话数上限 |
 | `backfillMinBytes` | `1048576` | 字节 | 补行的最小文件大小（1 MiB） |
 | `backfillMaxBytes` | `33554432` | 字节 | 补行的最大文件大小（32 MiB） |
-| `debugApi` | `false` | — | 暴露 `debug.fork` 调试端点（仅用于测量） |
+| `debugApi` | `false` | — | 暴露 `debug.fork` / `debug.sessions` / `debug.heap` / `debug.projectionCache`（仅用于测量） |
+| `debugAgentHandles` | `false` | — | 分析专用：捕获 `AgentHandle` 并暴露 `__dshPerfProbe`；默认关，勿在生产打开 |
 
 **哪些键运行期改得动**：`fastTurnOutline` / `chunkedMaterialize` / `zeroCopyFork` /
 `maxInitialMessages` / `maxPageBytes` / `renderTiming` / `memoryBudgetBytes` /
-`heapWarnBytes` 只在**安装时**读一次，改了要重启（或用启动期环境变量，见下）；
+`heapWarnBytes` / `debugAgentHandles` 只在**安装时**读一次，改了要重启（或用启动期环境变量，见下）；
 `clientContainment` 由浏览器在启动时取一次。其余键在下次使用时重读。
 
 启动期还可用环境变量覆盖任意配置键（仅用于离线测量）：键名是大写蛇形加
@@ -160,6 +173,9 @@ node --max-old-space-size=8192 <dsh 入口> web
 | `stats.reset` | 清零计数（保留 `patches` 与 `dshVersion`） |
 | `config.get` / `config.set` | 读取/修改运行时开关，`set` 同时写 settings 持久化 |
 | `debug.fork` | 仅当 `debugApi=true` 时存在：直接调用 `SessionStore.prototype.fork` |
+| `debug.sessions` | 仅当 `debugApi=true` 时存在：只读列出 live agents/sessions、observation cache、coldLogMemo |
+| `debug.heap` | 仅当 `debugApi=true` 时存在：只读返回 `process.memoryUsage()` 与 v8 heap 统计 |
+| `debug.projectionCache` | 仅当 `debugApi=true` 时存在：只读汇总投影缓存行的 rows/bytes（测量用） |
 | `perf.report` | 仅当 `renderTiming=true` 时存在：浏览器回传首行/稳定/长任务样本 |
 
 ```sh
@@ -181,7 +197,7 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
   "dshVersion": "0.2.2-rc.1",
   "patches": { "zeroCopyFork": "active", "fastTurnOutline": "active", ... },
   "forks": 0, "zeroCopy": 0, "fallbacks": 0, "forkRecent": [],
-  "memoryBudget": { "budgetBytes": 536870912, "cachedEntries": 0, "estimatedBytes": 0 }, // 关闭时恒为 null
+  "memoryBudget": { "budgetBytes": 536870912, "cachedEntries": 0, "cachedEvents": 0, "estimatedBytes": 0, "memoEntries": 0, "memoBytes": 0 }, // 关闭时恒为 null
   "memoryBudgetTrimmed": 0, "memoryBudgetFreedBytes": 0, "memoryBudgetOverBudget": 0,
   "coldWriteBacks": 0, "backfilled": 0, "backfillSkipped": 0,
   "render": {
@@ -193,7 +209,9 @@ curl -X POST http://127.0.0.1:3080/dsh-large-proj-perf/api/config.set \
 ```
 
 `memoryBudget` 在预算关闭/不适用时恒为 `null`——字段始终存在，消费端不必判断键是否
-存在。`render` 只在 `renderTiming=true` 时有值：`pages` 是服务端每页的
+存在。`cachedEvents` 是缓存条目里的事件总数（用于对照实际 bytes/event），
+`memoEntries` / `memoBytes` 是 `coldLogMemo` 的条目与估算字节（原先不可见）。
+`render` 只在 `renderTiming=true` 时有值：`pages` 是服务端每页的
 `{kind, ms, startedAt, records, bytes}`（jump 条目用 `recordsTotal` / `bytesTotal`，
 表示跨页合计）；`sends` 是 `ws.send` 的 `{t, sentAt, bytes}`；`clients` 是浏览器回传的
 `{kind, rows, firstRowMs, firstFrameMs, settleMs, longTasks, blockingMs, maxTaskMs,
@@ -216,7 +234,7 @@ heartbeatMaxLagMs, streams, timeline}`；`jumps` 是服务端识别出的回合�
 ### 常见问题
 
 **看不到任何 `[dsh-perf]` 日志**
-这是**默认配置下的常态**，不是故障（见上文「两条必须知道的限制」）。用 `stats.get`
+这是**默认配置下的常态**，不是故障（见上文「三条必须知道的限制」）。用 `stats.get`
 判断插件状态。
 
 **`stats.patches` 显示 `active`，但好像没效果**

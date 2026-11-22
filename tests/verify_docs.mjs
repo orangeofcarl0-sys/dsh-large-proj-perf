@@ -27,6 +27,7 @@ const DOCS = [
   'CHANGELOG.md',
   'docs/ARCHITECTURE.md',
   'docs/MEASUREMENTS.md',
+  'docs/LIVE-SESSION-ANALYSIS.md',
   'docs/RENDER-ANALYSIS.md',
   'docs/HARNESS-COMPARISON.md',
   'docs/COMPATIBILITY.md',

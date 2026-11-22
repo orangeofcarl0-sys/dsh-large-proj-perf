@@ -25,7 +25,7 @@ const TELEMETRY_ENV = String.fromCharCode(68, 83, 72, 95, 84, 69, 76, 69, 77, 69
 const READY_RE = /dsh web: (https?:\/\/[^\s]*[?&]token=[A-Za-z0-9_-]+)/
 
 // 起一个实例，等就绪，返回句柄。timeoutMs 到点仍无 token 行则抛错并附带日志尾部。
-export async function startDsh({ home, agentsHome, profile, port, outDir, extraArgs = [], extraEnv = {}, readyTimeoutMs = 120000 }) {
+export async function startDsh({ home, agentsHome, profile, port, outDir, extraArgs = [], extraEnv = {}, nodeArgs = [], readyTimeoutMs = 120000 }) {
   // 端口必须已释放：dsh 不重试也不自动换端口，占用时整个启动失败。
   if (!(await waitPortFree(port, 3000))) {
     throw new Error(`port ${port} is still in use; a previous dsh instance did not exit`)
@@ -35,7 +35,7 @@ export async function startDsh({ home, agentsHome, profile, port, outDir, extraA
   const outStream = createWriteStream(outLog, { flags: 'w' })
   const errStream = createWriteStream(errLog, { flags: 'w' })
 
-  const args = [DSH_BIN, '--profile', profile, '--host', '127.0.0.1', '--port', String(port), '--no-open', ...extraArgs]
+  const args = [...nodeArgs, DSH_BIN, '--profile', profile, '--host', '127.0.0.1', '--port', String(port), '--no-open', ...extraArgs]
   const child = spawn(process.execPath, args, {
     cwd: home,
     env: { ...process.env, [HOME_ENV]: home, [AGENTS_ENV]: agentsHome, [TELEMETRY_ENV]: '1', ...extraEnv },

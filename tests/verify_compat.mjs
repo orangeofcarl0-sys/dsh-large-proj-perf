@@ -242,6 +242,12 @@ check('api contract: config.set accepts a flat key/value body',
 const statsSrc = readFileSync(new URL('../lib/stats.js', import.meta.url), 'utf8')
 check('runtime probe: debug.fork is gated by debugApi',
   apiSrc.includes("method === 'debug.fork'") && apiSrc.includes('config.debugApi'))
+check('analysis probe: debug.sessions/debug.heap are gated by debugApi',
+  apiSrc.includes("method === 'debug.sessions'") && apiSrc.includes("method === 'debug.heap'")
+    && apiSrc.includes('config.debugApi'))
+check('analysis probe: debug.sessions never materializes the full log',
+  !apiSrc.slice(apiSrc.indexOf("method === 'debug.sessions'"), apiSrc.indexOf("method === 'debug.heap'"))
+    .includes('.snapshotEvents('))
 check('stats: keeps the retired status (upstream-absorbed capability must be expressible)',
   statsSrc.includes('retired'))
 
@@ -249,6 +255,12 @@ check('stats: keeps the retired status (upstream-absorbed capability must be exp
 const configSrc = readFileSync(new URL('../lib/config.js', import.meta.url), 'utf8')
 check('config: env override is derived from DEFAULT_CONFIG keys',
   configSrc.includes('DSH_PERF_') && /for \(const key of Object\.keys\(DEFAULT_CONFIG\)\)/.test(configSrc))
+const agentDebugSrc = readFileSync(new URL('../lib/agent-debug.js', import.meta.url), 'utf8')
+check('analysis probe: AgentHandle capture is opt-in and restores prototypes',
+  configSrc.includes('debugAgentHandles: false')
+    && agentDebugSrc.includes('if (!config.debugAgentHandles) return')
+    && agentDebugSrc.includes('wrapMethod')
+    && agentDebugSrc.includes('__dshPerfProbe'))
 
 // ---- 冷读回写（v1.7）----
 // 依据：dsh 0.2.2 的冷读回写路径 sessionProjectionCache.coldSnapshot() 无任何
@@ -329,6 +341,16 @@ check('memory budget: defaults to 512 MiB, 0 disables',
   /DEFAULT_MEMORY_BUDGET_BYTES = 536870912/.test(constantsSrc)
     && configSrc.includes('memoryBudgetBytes: DEFAULT_MEMORY_BUDGET_BYTES')
     && memBudgetSrc.includes("setPatchStatus('memoryBudget', 'off')"))
+const eventBytesSrc = readFileSync(new URL('../lib/event-bytes.js', import.meta.url), 'utf8')
+check('memory budget: content-aware estimator is present',
+  eventBytesSrc.includes('JSON.stringify') && eventBytesSrc.includes('WeakMap')
+    && eventBytesSrc.includes('EXACT_TYPE_LIMIT') && eventBytesSrc.includes('STRING_OVERHEAD_BYTES'))
+check('memory budget: newest entry and pinned entries are protected',
+  memBudgetSrc.includes('id === keepId') && memBudgetSrc.includes('candidate?.refs > 0'))
+check('memory budget: lease release rechecks bytes',
+  memBudgetSrc.includes('evictPastCapacity') && memBudgetSrc.includes('patchedEvict'))
+check('memory budget: stats exposes cache and memo counters',
+  memBudgetSrc.includes('cachedEvents') && memBudgetSrc.includes('memoBytes'))
 
 // ---- 客户端 bundle 清单（v1.12）----
 // dsh 的 client-modules 会读 dsh.client，并要求 exports["./client"] 指向真实文件。

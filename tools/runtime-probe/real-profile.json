@@ -1,0 +1,56 @@
+{
+  "source": {
+    "corpus": "local dsh home, read-only sample",
+    "sessions": 16,
+    "events": 103184,
+    "filter": "events >= 100; 24 copied, 8 tiny/blank excluded",
+    "note": "medians of session-level metrics; large-session scale chosen for memory runs",
+    "calibration": "assistantJson median reduced from corpus p50 4421 to 3800 so generated aggregate JSON/event matches corpus 2116"
+  },
+  "session": {
+    "turns": 230
+  },
+  "stepsPerTurn": {
+    "median": 22,
+    "sigma": 0.6,
+    "min": 1,
+    "max": 80
+  },
+  "toolCallsPerStep": {
+    "zeroRate": 0.1,
+    "twoRate": 0.05,
+    "threeRate": 0
+  },
+  "sizes": {
+    "assistantJson": {
+      "median": 3800,
+      "sigma": 1.09
+    },
+    "assistantStreamChunks": {
+      "median": 50,
+      "sigma": 1.2
+    },
+    "toolCallJson": {
+      "median": 490,
+      "sigma": 1.3
+    },
+    "toolResultJson": {
+      "median": 1038,
+      "sigma": 1.05
+    },
+    "userJson": {
+      "median": 1407,
+      "sigma": 0.3
+    },
+    "requestHeaderJson": {
+      "median": 22843,
+      "sigma": 0
+    }
+  },
+  "rates": {
+    "requestHeaderPerTurn": 0.14,
+    "requestContextPerTurn": 0.1,
+    "reasoningBlock": 0.05,
+    "cjk": 0.03
+  }
+}
