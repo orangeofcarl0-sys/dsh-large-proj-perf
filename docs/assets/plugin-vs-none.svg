@@ -1,127 +1,148 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 760" width="960" height="760" role="img" aria-labelledby="title desc">
-  <title id="title">有插件与无插件的效果对比</title>
-  <desc id="desc">冷读 21.2 到 3.0 秒，Web 首行 5.03 到 3.63 秒，打开峰值 Host 堆增量 217 到 118.7 MiB，批量翻十页阻塞 2836 到 1489 毫秒；稳态内存持平。缓存预算 512 MiB 保留 4 条 662.4 MiB，256 MiB 保留 2 条 433.1 MiB。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 630" width="960" height="630" role="img" aria-labelledby="title desc">
+  <title id="title">有插件与无插件：时间、内存与缓存预算对比</title>
+  <desc id="desc">蓝条为有插件（或预算后）相对基线（无插件或无预算）的比例，虚线为基线 100%。冷读 21.2 到 3.0 秒（−86%），Web 首行 5.03 到 3.63 秒（−28%），批量翻十页阻塞 2836 到 1489 毫秒（−47%），最长任务 416 到 244 毫秒（−41%）；打开峰值 Host 堆增量 217 到 118.7 MiB（−45%），稳态 332.5 到 332.3 MiB 持平；缓存预算 512 MiB 保留 4 条 662.4 MiB（−14.7%），256 MiB 保留 2 条 433.1 MiB（−44.3%）。</desc>
   <defs>
     <style>
-      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; fill: #1f2328; }
-      .muted { fill: #57606a; }
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", "PingFang SC", "Microsoft YaHei", Helvetica, Arial, sans-serif; fill: #111827; }
       .num { font-variant-numeric: tabular-nums; }
-      .green { fill: #1a7f37; }
-      .card { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1; }
-      .track { fill: #eaeef2; }
-      .none { fill: #8c959f; opacity: 0.55; }
-      .plugin { fill: #0969da; }
+      .subtitle { font-size: 12.5px; fill: #6b7280; }
+      .panel-title { font-size: 14px; font-weight: 600; fill: #111827; }
+      .panel-note { font-size: 11.5px; fill: #6b7280; }
+      .row-name { font-size: 13px; fill: #111827; }
+      .old { font-size: 11.5px; fill: #7b8794; }
+      .arrow { font-size: 12px; fill: #b3bfcc; }
+      .new-num { font-size: 16px; font-weight: 600; fill: #111827; }
+      .new-unit { font-size: 11px; font-weight: 500; fill: #6b7280; }
+      .same { font-size: 13px; font-weight: 500; fill: #6b7280; }
+      .axis { font-size: 11px; fill: #9ca3af; }
+      .foot { font-size: 11px; fill: #6b7280; }
+      .legend { font-size: 12px; fill: #374151; }
     </style>
   </defs>
-  <rect width="960" height="760" fill="#ffffff"/>
 
-  <text x="24" y="38" font-size="26" font-weight="600">有插件 vs 无插件：最终对比</text>
-  <text x="24" y="62" class="muted" font-size="13">dsh 0.2.2-rc.5 · 91k / 240k 事件 fixture · 时间与阻塞、峰值/稳态内存、缓存预算</text>
+  <rect width="960" height="630" fill="#ffffff"/>
+
+  <text x="32" y="40" font-size="24" font-weight="600">有插件 vs 无插件</text>
+  <text x="32" y="64" class="subtitle num">dsh-large-proj-perf 1.16.2 · dsh 0.2.2-rc.5 · 隔离 profile 实测 · 冷读 240k / Web 91k 事件 · 越低越好</text>
+
+  <g class="legend">
+    <rect x="676" y="28" width="10" height="10" fill="#2563eb"/>
+    <text x="692" y="38">有插件 / 预算后</text>
+    <line x1="800" y1="33" x2="818" y2="33" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="824" y="38">基线 = 100%</text>
+  </g>
+
+  <!-- Panel A: time -->
+  <text x="32" y="106" class="panel-title">打开耗时与阻塞</text>
+  <text x="928" y="106" text-anchor="end" class="panel-note">相对无插件 = 100%</text>
 
   <g>
-    <rect class="card" x="24" y="82" width="222" height="90" rx="10"/>
-    <text x="40" y="106" class="muted" font-size="12">冷读（240k 事件）</text>
-    <text x="40" y="134" font-size="20" font-weight="600" class="num">21.2 → 3.0 s</text>
-    <text x="40" y="156" class="green" font-size="12">−86% · turnOutline O(n²)→O(n)</text>
+    <line x1="315" y1="116" x2="315" y2="238" stroke="#eef0f2"/>
+    <line x1="430" y1="116" x2="430" y2="238" stroke="#eef0f2"/>
+    <line x1="545" y1="116" x2="545" y2="238" stroke="#eef0f2"/>
+    <line x1="660" y1="116" x2="660" y2="238" stroke="#9ca3af" stroke-dasharray="4 3"/>
 
-    <rect class="card" x="258" y="82" width="222" height="90" rx="10"/>
-    <text x="274" y="106" class="muted" font-size="12">Web 首行（91k）</text>
-    <text x="274" y="134" font-size="20" font-weight="600" class="num">5.03 → 3.63 s</text>
-    <text x="274" y="156" class="green" font-size="12">−28% · 两次有插件运行均值</text>
+    <text x="32" y="139" class="row-name">冷读 240k 事件</text>
+    <rect x="200" y="126" width="65.1" height="14" fill="#2563eb"/>
+    <text x="750" y="139" text-anchor="end" class="old num">21.2</text>
+    <text x="766" y="139" text-anchor="middle" class="arrow">→</text>
+    <text x="782" y="139" class="num"><tspan class="new-num">3.0</tspan><tspan class="new-unit"> s</tspan></text>
+    <text x="928" y="139" text-anchor="end" class="num"><tspan font-size="15" font-weight="650" fill="#15803d">−86</tspan><tspan font-size="11" font-weight="600" fill="#15803d">%</tspan></text>
 
-    <rect class="card" x="492" y="82" width="222" height="90" rx="10"/>
-    <text x="508" y="106" class="muted" font-size="12">打开峰值 Host 堆增量</text>
-    <text x="508" y="134" font-size="20" font-weight="600" class="num">+217 → +118.7 MiB</text>
-    <text x="508" y="156" class="green" font-size="12">−45% · 稳态基本不变</text>
+    <text x="32" y="169" class="row-name">Web 首行 91k</text>
+    <rect x="200" y="156" width="332" height="14" fill="#2563eb"/>
+    <text x="750" y="169" text-anchor="end" class="old num">5.03</text>
+    <text x="766" y="169" text-anchor="middle" class="arrow">→</text>
+    <text x="782" y="169" class="num"><tspan class="new-num">3.63</tspan><tspan class="new-unit"> s</tspan></text>
+    <text x="928" y="169" text-anchor="end" class="num"><tspan font-size="15" font-weight="650" fill="#15803d">−28</tspan><tspan font-size="11" font-weight="600" fill="#15803d">%</tspan></text>
 
-    <rect class="card" x="726" y="82" width="222" height="90" rx="10"/>
-    <text x="742" y="106" class="muted" font-size="12">批量翻 10 页阻塞</text>
-    <text x="742" y="134" font-size="20" font-weight="600" class="num">2 836 → 1 489 ms</text>
-    <text x="742" y="156" class="green" font-size="12">−47% · content-visibility</text>
+    <text x="32" y="199" class="row-name">批量翻 10 页阻塞</text>
+    <rect x="200" y="186" width="241.5" height="14" fill="#2563eb"/>
+    <text x="750" y="199" text-anchor="end" class="old num">2 836</text>
+    <text x="766" y="199" text-anchor="middle" class="arrow">→</text>
+    <text x="782" y="199" class="num"><tspan class="new-num">1 489</tspan><tspan class="new-unit"> ms</tspan></text>
+    <text x="928" y="199" text-anchor="end" class="num"><tspan font-size="15" font-weight="650" fill="#15803d">−47</tspan><tspan font-size="11" font-weight="600" fill="#15803d">%</tspan></text>
+
+    <text x="32" y="229" class="row-name">批量翻页最长任务</text>
+    <rect x="200" y="216" width="269.8" height="14" fill="#2563eb"/>
+    <text x="750" y="229" text-anchor="end" class="old num">416</text>
+    <text x="766" y="229" text-anchor="middle" class="arrow">→</text>
+    <text x="782" y="229" class="num"><tspan class="new-num">244</tspan><tspan class="new-unit"> ms</tspan></text>
+    <text x="928" y="229" text-anchor="end" class="num"><tspan font-size="15" font-weight="650" fill="#15803d">−41</tspan><tspan font-size="11" font-weight="600" fill="#15803d">%</tspan></text>
+
+    <text x="200" y="254" text-anchor="middle" class="axis num">0%</text>
+    <text x="315" y="254" text-anchor="middle" class="axis num">25%</text>
+    <text x="430" y="254" text-anchor="middle" class="axis num">50%</text>
+    <text x="545" y="254" text-anchor="middle" class="axis num">75%</text>
+    <text x="660" y="254" text-anchor="middle" class="axis num">100%</text>
   </g>
 
-  <text x="24" y="206" font-size="16" font-weight="600">时间与阻塞</text>
-  <g font-size="13">
-    <text x="24" y="238">冷读 240k 事件</text>
-    <rect class="track" x="200" y="228" width="520" height="10" rx="5"/>
-    <rect class="none" x="200" y="228" width="501" height="10" rx="5"/>
-    <text x="736" y="238" class="num muted" font-size="12">21.2 s</text>
-    <text x="936" y="238" class="green num" text-anchor="end" font-size="12">−86%</text>
-    <rect class="track" x="200" y="246" width="520" height="10" rx="5"/>
-    <rect class="plugin" x="200" y="246" width="71" height="10" rx="5"/>
-    <text x="736" y="256" class="num muted" font-size="12">3.0 s</text>
+  <!-- Panel B: memory -->
+  <text x="32" y="290" class="panel-title">内存：削峰，不降稳态</text>
+  <text x="928" y="290" text-anchor="end" class="panel-note">相对无插件 = 100%</text>
 
-    <text x="24" y="280">Web 首行 91k</text>
-    <rect class="track" x="200" y="270" width="520" height="10" rx="5"/>
-    <rect class="none" x="200" y="270" width="436" height="10" rx="5"/>
-    <text x="736" y="280" class="num muted" font-size="12">5.03 s</text>
-    <text x="936" y="280" class="green num" text-anchor="end" font-size="12">−28%</text>
-    <rect class="track" x="200" y="288" width="520" height="10" rx="5"/>
-    <rect class="plugin" x="200" y="288" width="315" height="10" rx="5"/>
-    <text x="736" y="298" class="num muted" font-size="12">3.63 s</text>
+  <g>
+    <line x1="315" y1="300" x2="315" y2="362" stroke="#eef0f2"/>
+    <line x1="430" y1="300" x2="430" y2="362" stroke="#eef0f2"/>
+    <line x1="545" y1="300" x2="545" y2="362" stroke="#eef0f2"/>
+    <line x1="660" y1="300" x2="660" y2="362" stroke="#9ca3af" stroke-dasharray="4 3"/>
 
-    <text x="24" y="322">批量翻 10 页阻塞</text>
-    <rect class="track" x="200" y="312" width="520" height="10" rx="5"/>
-    <rect class="none" x="200" y="312" width="492" height="10" rx="5"/>
-    <text x="736" y="322" class="num muted" font-size="12">2 836 ms</text>
-    <text x="936" y="322" class="green num" text-anchor="end" font-size="12">−47%</text>
-    <rect class="track" x="200" y="330" width="520" height="10" rx="5"/>
-    <rect class="plugin" x="200" y="330" width="258" height="10" rx="5"/>
-    <text x="736" y="340" class="num muted" font-size="12">1 489 ms</text>
+    <text x="32" y="323" class="row-name">打开峰值增量</text>
+    <rect x="200" y="310" width="251.6" height="14" fill="#2563eb"/>
+    <text x="750" y="323" text-anchor="end" class="old num">+217.0</text>
+    <text x="766" y="323" text-anchor="middle" class="arrow">→</text>
+    <text x="782" y="323" class="num"><tspan class="new-num">+118.7</tspan><tspan class="new-unit"> MiB</tspan></text>
+    <text x="928" y="323" text-anchor="end" class="num"><tspan font-size="15" font-weight="650" fill="#15803d">−45</tspan><tspan font-size="11" font-weight="600" fill="#15803d">%</tspan></text>
 
-    <text x="24" y="364">批量翻页最长任务</text>
-    <rect class="track" x="200" y="354" width="520" height="10" rx="5"/>
-    <rect class="none" x="200" y="354" width="481" height="10" rx="5"/>
-    <text x="736" y="364" class="num muted" font-size="12">416 ms</text>
-    <text x="936" y="364" class="green num" text-anchor="end" font-size="12">−41%</text>
-    <rect class="track" x="200" y="372" width="520" height="10" rx="5"/>
-    <rect class="plugin" x="200" y="372" width="282" height="10" rx="5"/>
-    <text x="736" y="382" class="num muted" font-size="12">244 ms</text>
-  </g>
-  <text x="200" y="402" class="muted" font-size="11">每行按自身无插件值归一；灰色=无插件，蓝色=有插件。</text>
+    <text x="32" y="353" class="row-name">稳态 Host 堆</text>
+    <rect x="200" y="340" width="459.7" height="14" fill="#2563eb"/>
+    <text x="750" y="353" text-anchor="end" class="old num">332.5</text>
+    <text x="766" y="353" text-anchor="middle" class="arrow">→</text>
+    <text x="782" y="353" class="num"><tspan class="new-num">332.3</tspan><tspan class="new-unit"> MiB</tspan></text>
+    <text x="928" y="353" text-anchor="end" class="same num">持平</text>
 
-  <text x="24" y="436" font-size="16" font-weight="600">内存：削峰，但不降稳态</text>
-  <g font-size="13">
-    <text x="24" y="468">打开峰值 Host 堆增量</text>
-    <rect class="track" x="200" y="458" width="330" height="10" rx="5"/>
-    <rect class="none" x="200" y="458" width="311" height="10" rx="5"/>
-    <text x="546" y="468" class="num" font-size="12">+217.0 MiB</text>
-    <rect class="track" x="200" y="476" width="330" height="10" rx="5"/>
-    <rect class="plugin" x="200" y="476" width="170" height="10" rx="5"/>
-    <text x="546" y="486" class="num" font-size="12">+118.7 MiB</text>
-  </g>
-  <rect class="card" x="648" y="446" width="288" height="86" rx="8"/>
-  <g font-size="12">
-    <text x="664" y="470" class="muted">稳态（运行噪声内持平）</text>
-    <text x="664" y="492" class="num">Host 堆 332.5 → 332.3 MiB</text>
-    <text x="664" y="510" class="num">渲染进程 238.4 → 239.7 MiB</text>
-    <text x="664" y="528" class="num">浏览器堆 52.0 → 51.8 MiB</text>
+    <text x="200" y="378" text-anchor="middle" class="axis num">0%</text>
+    <text x="315" y="378" text-anchor="middle" class="axis num">25%</text>
+    <text x="430" y="378" text-anchor="middle" class="axis num">50%</text>
+    <text x="545" y="378" text-anchor="middle" class="axis num">75%</text>
+    <text x="660" y="378" text-anchor="middle" class="axis num">100%</text>
+
+    <text x="32" y="400" class="panel-note">渲染进程 238.4 → 239.7 MiB、浏览器堆 52.0 → 51.8 MiB，均在运行噪声内。</text>
   </g>
 
-  <text x="24" y="566" font-size="16" font-weight="600">缓存预算：真正的稳态差异</text>
-  <g font-size="13">
-    <text x="24" y="596">无预算（5 条上限）</text>
-    <text x="180" y="596" class="num muted">5 条</text>
-    <rect class="track" x="260" y="586" width="500" height="10" rx="5"/>
-    <rect class="none" x="260" y="586" width="486" height="10" rx="5"/>
-    <text x="776" y="596" class="num" font-size="12">776.9 MiB</text>
+  <!-- Panel C: cache budget -->
+  <text x="32" y="436" class="panel-title">缓存预算：无预算 vs 512 / 256 MiB</text>
+  <text x="928" y="436" text-anchor="end" class="panel-note">相对无预算 = 100%</text>
 
-    <text x="24" y="628">字节预算 512 MiB</text>
-    <text x="180" y="628" class="num muted">4 条</text>
-    <rect class="track" x="260" y="618" width="500" height="10" rx="5"/>
-    <rect class="plugin" x="260" y="618" width="414" height="10" rx="5"/>
-    <text x="776" y="628" class="num" font-size="12">662.4 MiB</text>
-    <text x="936" y="628" class="green num" text-anchor="end" font-size="12">−114.5 MiB</text>
+  <g>
+    <line x1="315" y1="446" x2="315" y2="508" stroke="#eef0f2"/>
+    <line x1="430" y1="446" x2="430" y2="508" stroke="#eef0f2"/>
+    <line x1="545" y1="446" x2="545" y2="508" stroke="#eef0f2"/>
+    <line x1="660" y1="446" x2="660" y2="508" stroke="#9ca3af" stroke-dasharray="4 3"/>
 
-    <text x="24" y="660">字节预算 256 MiB</text>
-    <text x="180" y="660" class="num muted">2 条</text>
-    <rect class="track" x="260" y="650" width="500" height="10" rx="5"/>
-    <rect class="plugin" x="260" y="650" width="271" height="10" rx="5"/>
-    <text x="776" y="660" class="num" font-size="12">433.1 MiB</text>
-    <text x="936" y="660" class="green num" text-anchor="end" font-size="12">−343.8 MiB</text>
+    <text x="32" y="469" class="row-name">512 MiB 预算 · 4 条</text>
+    <rect x="200" y="456" width="392.2" height="14" fill="#2563eb"/>
+    <text x="750" y="469" text-anchor="end" class="old num">776.9</text>
+    <text x="766" y="469" text-anchor="middle" class="arrow">→</text>
+    <text x="782" y="469" class="num"><tspan class="new-num">662.4</tspan><tspan class="new-unit"> MiB</tspan></text>
+    <text x="928" y="469" text-anchor="end" class="num"><tspan font-size="15" font-weight="650" fill="#15803d">−14.7</tspan><tspan font-size="11" font-weight="600" fill="#15803d">%</tspan></text>
+
+    <text x="32" y="499" class="row-name">256 MiB 预算 · 2 条</text>
+    <rect x="200" y="486" width="256.4" height="14" fill="#2563eb"/>
+    <text x="750" y="499" text-anchor="end" class="old num">776.9</text>
+    <text x="766" y="499" text-anchor="middle" class="arrow">→</text>
+    <text x="782" y="499" class="num"><tspan class="new-num">433.1</tspan><tspan class="new-unit"> MiB</tspan></text>
+    <text x="928" y="499" text-anchor="end" class="num"><tspan font-size="15" font-weight="650" fill="#15803d">−44.3</tspan><tspan font-size="11" font-weight="600" fill="#15803d">%</tspan></text>
+
+    <text x="200" y="524" text-anchor="middle" class="axis num">0%</text>
+    <text x="315" y="524" text-anchor="middle" class="axis num">25%</text>
+    <text x="430" y="524" text-anchor="middle" class="axis num">50%</text>
+    <text x="545" y="524" text-anchor="middle" class="axis num">75%</text>
+    <text x="660" y="524" text-anchor="middle" class="axis num">100%</text>
+
+    <text x="32" y="546" class="panel-note">5 个 91k 会话 passive read；基线 = 无预算 5 条 / 776.9 MiB。</text>
   </g>
-  <text x="260" y="680" class="muted" font-size="11">5 个 91k 会话 passive read；无预算行等价无插件 5 条上限。真实对话条目数随会话大小/消息分布变化。</text>
 
-  <text x="24" y="712" class="muted" font-size="11">分片 materialize 消除超大会话落盘 RangeError；零拷贝 fork 直测 −16%~−21%，但 Web UI 不走该路径（stats.forks=0）；renderTiming 只采集不改变渲染。</text>
-  <text x="24" y="732" class="muted" font-size="11">来源与边界：docs/MEASUREMENTS.md、docs/RENDER-ANALYSIS.md；峰值增量取有插件两次运行均值。</text>
+  <text x="32" y="588" class="foot num">峰值取两次有插件运行均值（+129.9 / +107.5 MiB）；插件自身 GC 后常驻约 1 MiB。</text>
+  <text x="32" y="606" class="foot num">零拷贝 fork 直测 −16% ~ −21%，但 Web UI 不走该路径（stats.forks = 0）；renderTiming 只采集。来源：docs/MEASUREMENTS.md。</text>
 </svg>
